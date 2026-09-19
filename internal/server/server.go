@@ -2,9 +2,11 @@ package server
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
+	"math/big"
 	"html/template"
 	"log"
 	"net/http"
@@ -23,9 +25,10 @@ type Config struct {
 
 type challenge struct {
 	Email string
-	Code string
+	CodeHash [32]byte
 	ReturnURL string
 	ExpiresAt time.Time
+	Attempts int
 }
 
 type device struct {
@@ -83,7 +86,7 @@ func (s *Server) startChallenge(w http.ResponseWriter, r *http.Request) {
 
 	id, code := randomToken(24), randomCode()
 	s.mu.Lock()
-	s.challenges[id] = challenge{Email: email, Code: code, ReturnURL: returnURL, ExpiresAt: time.Now().Add(10 * time.Minute)}
+	s.challenges[id] = challenge{Email: email, CodeHash: hashValue(code), ReturnURL: returnURL, ExpiresAt: time.Now().Add(10 * time.Minute)}
 	s.mu.Unlock()
 	log.Printf("development OTP for %s: %s", email, code)
 	http.Redirect(w, r, "/.gatekeeper/verify?id="+url.QueryEscape(id), http.StatusFound)
@@ -94,7 +97,7 @@ func (s *Server) verify(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	ch, ok := s.challenges[id]
 	s.mu.Unlock()
-	if !ok || time.Now().After(ch.ExpiresAt) { http.Error(w, "This access code has expired.", http.StatusUnauthorized); return }
+	if !ok || time.Now().After(ch.ExpiresAt) { s.expireChallenge(id); render(w, expiredTemplate, nil); return }
 	render(w, verifyTemplate, map[string]string{"ID": id})
 }
 
@@ -104,9 +107,23 @@ func (s *Server) completeChallenge(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.Lock()
 	ch, ok := s.challenges[id]
-	if !ok || time.Now().After(ch.ExpiresAt) || subtle.ConstantTimeCompare([]byte(code), []byte(ch.Code)) != 1 {
+	if !ok || time.Now().After(ch.ExpiresAt) {
+		delete(s.challenges, id)
 		s.mu.Unlock()
-		http.Error(w, "Invalid or expired access code.", http.StatusUnauthorized)
+		render(w, expiredTemplate, nil)
+		return
+	}
+	if subtle.ConstantTimeCompare(hashBytes(code), ch.CodeHash[:]) != 1 {
+		ch.Attempts++
+		if ch.Attempts >= 5 {
+			delete(s.challenges, id)
+			s.mu.Unlock()
+			render(w, expiredTemplate, nil)
+			return
+		}
+		s.challenges[id] = ch
+		s.mu.Unlock()
+		render(w, invalidCodeTemplate, map[string]any{"ID": id, "AttemptsLeft": 5 - ch.Attempts})
 		return
 	}
 	delete(s.challenges, id)
@@ -154,10 +171,24 @@ func randomToken(size int) string {
 }
 
 func randomCode() string {
-	buf := make([]byte, 3)
-	if _, err := rand.Read(buf); err != nil { panic(err) }
-	n := (int(buf[0])<<16 | int(buf[1])<<8 | int(buf[2])) % 1000000
-	return fmt.Sprintf("%06d", n)
+	n, err := rand.Int(rand.Reader, big.NewInt(1000000))
+	if err != nil { panic(err) }
+	return fmt.Sprintf("%06d", n.Int64())
+}
+
+func hashValue(value string) [32]byte {
+	return sha256.Sum256([]byte(value))
+}
+
+func hashBytes(value string) []byte {
+	h := hashValue(value)
+	return h[:]
+}
+
+func (s *Server) expireChallenge(id string) {
+	s.mu.Lock()
+	delete(s.challenges, id)
+	s.mu.Unlock()
 }
 
 func render(w http.ResponseWriter, source string, data any) {
@@ -179,4 +210,6 @@ const style = "<style>body{font-family:system-ui,sans-serif;background:#f5f6f8;c
 
 const loginTemplate = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">`+style+`<title>Access required</title></head><body><main><h1>Access required</h1><p>Enter your authorised email address. If it has access, we'll send you a one-time code.</p><form method="post" action="/.gatekeeper/login"><input type="hidden" name="return" value="{{.ReturnURL}}"><label for="email">Email address</label><input id="email" name="email" type="email" autocomplete="email" required autofocus><button type="submit">Send access code</button></form></main></body></html>`
 const verifyTemplate = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">`+style+`<title>Enter access code</title></head><body><main><h1>Check your email</h1><p>Enter the six-digit access code. It expires after 10 minutes.</p><form method="post" action="/.gatekeeper/verify"><input type="hidden" name="id" value="{{.ID}}"><label for="code">Access code</label><input id="code" name="code" inputmode="numeric" pattern="[0-9]{6}" autocomplete="one-time-code" required autofocus><button type="submit">Continue</button></form></main></body></html>`
+const invalidCodeTemplate = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">`+style+`<title>Invalid access code</title></head><body><main><h1>That code was not accepted</h1><p>Please check the code and try again. You have {{.AttemptsLeft}} attempts remaining.</p><form method="post" action="/.gatekeeper/verify"><input type="hidden" name="id" value="{{.ID}}"><label for="code">Access code</label><input id="code" name="code" inputmode="numeric" pattern="[0-9]{6}" autocomplete="one-time-code" required autofocus><button type="submit">Continue</button></form></main></body></html>`
+const expiredTemplate = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">`+style+`<title>Request a new code</title></head><body><main><h1>Request a new code</h1><p>This access challenge has expired or can no longer be used.</p><p><a href="/.gatekeeper/login">Start again</a></p></main></body></html>`
 const sentTemplate = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">`+style+`<title>Check your email</title></head><body><main><h1>Check your email</h1><p>If that address is authorised, an access code has been sent. You can safely close this page if you didn't request access.</p></main></body></html>`
