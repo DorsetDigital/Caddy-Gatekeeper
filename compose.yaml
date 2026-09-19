@@ -12,9 +12,13 @@ services:
       GATEKEEPER_VALKEY_MODE: "standalone"
       GATEKEEPER_VALKEY_ADDRS: "valkey:6379"
       GATEKEEPER_VALKEY_TLS: "false"
+      GATEKEEPER_SMTP_ADDR: "mailpit:1025"
+      GATEKEEPER_SMTP_FROM: "gatekeeper@example.test"
     depends_on:
       valkey:
         condition: service_healthy
+      mailpit:
+        condition: service_started
 
   caddy:
     image: caddy:2-alpine
