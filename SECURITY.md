@@ -22,6 +22,8 @@ Caddy Gatekeeper is an internet-facing authentication boundary. Security-sensiti
 - [x] Cryptographically secure unbiased six-digit OTP generation.
 - [x] Hashed OTP storage.
 - [ ] Make authorised and unauthorised email submissions indistinguishable in status, redirect and visible browser flow.
+- [ ] Prevent timing-based account enumeration: SMTP/external delivery must not sit on the synchronous response path for authorised addresses.
+- [ ] Keep authorised and unauthorised request paths approximately equivalent in local work; do not rely on artificial fixed response delays as the primary defence.
 - [ ] Rate-limit OTP creation by site + email hash.
 - [ ] Rate-limit authentication attempts by site + IP and challenge.
 - [ ] Invalidate older outstanding challenges when appropriate.
