@@ -15,6 +15,19 @@ type Challenge struct {
 	Attempts int
 }
 
+type VerifyStatus int
+const (
+	VerifyNotFound VerifyStatus = iota
+	VerifyInvalid
+	VerifyExhausted
+	VerifySuccess
+)
+type VerifyResult struct {
+	Status VerifyStatus
+	Challenge Challenge
+	Remaining int
+}
+
 type Device struct {
 	IdentityID string
 	LastSeen time.Time
@@ -23,10 +36,10 @@ type Device struct {
 type Store interface {
 	CreateChallenge(context.Context, string, Challenge, time.Duration) error
 	GetChallenge(context.Context, string) (Challenge, error)
-	RecordFailedAttempt(context.Context, string, int) (remaining int, exhausted bool, err error)
-	ConsumeChallenge(context.Context, string) error
+	VerifyChallenge(context.Context, string, []byte, int) (VerifyResult, error)
 	CreateDevice(context.Context, string, Device, time.Duration) error
 	GetDevice(context.Context, string) (Device, error)
 	RefreshDevice(context.Context, string, Device, time.Duration) error
 	DeleteDevice(context.Context, string) error
+	Close() error
 }
