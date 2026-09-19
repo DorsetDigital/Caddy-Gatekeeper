@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
-	"log"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/access"
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/identity"
+	maildelivery "github.com/DorsetDigital/Caddy-Gatekeeper/internal/mail"
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/store"
 )
 
@@ -30,6 +30,7 @@ type Config struct {
 	MaxAttempts int
 	IdentityHasher identity.Hasher
 	Store store.Store
+	MailSender maildelivery.Sender
 }
 
 type Server struct { config Config }
@@ -82,7 +83,10 @@ func (s *Server) startChallenge(w http.ResponseWriter, r *http.Request) {
 	if err := s.config.Store.CreateChallenge(r.Context(), id, ch, s.config.ChallengeLifetime); err != nil {
 		http.Error(w, "Gatekeeper state unavailable", http.StatusServiceUnavailable); return
 	}
-	if authorised { log.Printf("development OTP for %s: %s", email, code) }
+	if authorised && s.config.MailSender != nil {
+		message:=maildelivery.OTPMessage(email,r.Host,code)
+		go func(){ _ = s.config.MailSender.Send(context.Background(),message) }()
+	}
 	http.Redirect(w, r, "/.gatekeeper/verify?id="+url.QueryEscape(id), http.StatusFound)
 }
 
