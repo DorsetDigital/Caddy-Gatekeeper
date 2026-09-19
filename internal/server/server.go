@@ -21,6 +21,7 @@ type Config struct {
 	CookieName string
 	CookieSecure bool
 	DeviceLifetime time.Duration
+	MaxAttempts int
 }
 
 type challenge struct {
@@ -120,7 +121,7 @@ func (s *Server) completeChallenge(w http.ResponseWriter, r *http.Request) {
 	}
 	if subtle.ConstantTimeCompare(hashBytes(code), ch.CodeHash[:]) != 1 {
 		ch.Attempts++
-		if ch.Attempts >= 5 {
+		if ch.Attempts >= s.config.MaxAttempts {
 			delete(s.challenges, id)
 			s.mu.Unlock()
 			render(w, expiredTemplate, nil)
@@ -128,7 +129,7 @@ func (s *Server) completeChallenge(w http.ResponseWriter, r *http.Request) {
 		}
 		s.challenges[id] = ch
 		s.mu.Unlock()
-		render(w, invalidCodeTemplate, map[string]any{"ID": id, "AttemptsLeft": 5 - ch.Attempts})
+		render(w, invalidCodeTemplate, map[string]any{"ID": id, "AttemptsLeft": s.config.MaxAttempts - ch.Attempts})
 		return
 	}
 	delete(s.challenges, id)
