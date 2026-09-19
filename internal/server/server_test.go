@@ -23,12 +23,12 @@ func TestSafeReturnURL(t *testing.T) {
 	}
 }
 
-func TestChallengeLockedAfterFiveBadCodes(t *testing.T) {
-	s := New(Config{AllowedEmail: "developer@example.test", CookieName: "gatekeeper_device", DeviceLifetime: 30 * 24 * time.Hour})
+func TestChallengeLockedAfterConfiguredBadCodes(t *testing.T) {
+	s := New(Config{AllowedEmail: "developer@example.test", CookieName: "gatekeeper_device", DeviceLifetime: 30 * 24 * time.Hour, MaxAttempts: 3})
 	id := "challenge"
 	s.challenges[id] = challenge{Email: "developer@example.test", CodeHash: hashValue("123456"), ReturnURL: "/protected", ExpiresAt: time.Now().Add(time.Minute)}
 
-	for attempt := 1; attempt <= 5; attempt++ {
+	for attempt := 1; attempt <= 3; attempt++ {
 		form := url.Values{"id": {id}, "code": {"000000"}}
 		req := httptest.NewRequest("POST", "/verify", strings.NewReader(form.Encode()))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -37,12 +37,12 @@ func TestChallengeLockedAfterFiveBadCodes(t *testing.T) {
 	}
 
 	if _, ok := s.challenges[id]; ok {
-		t.Fatal("challenge still exists after five failed attempts")
+		t.Fatal("challenge still exists after configured failed attempts")
 	}
 }
 
 func TestSuccessfulChallengeIsConsumed(t *testing.T) {
-	s := New(Config{AllowedEmail: "developer@example.test", CookieName: "gatekeeper_device", DeviceLifetime: 30 * 24 * time.Hour})
+	s := New(Config{AllowedEmail: "developer@example.test", CookieName: "gatekeeper_device", DeviceLifetime: 30 * 24 * time.Hour, MaxAttempts: 3})
 	id := "challenge"
 	s.challenges[id] = challenge{Email: "developer@example.test", CodeHash: hashValue("123456"), ReturnURL: "/protected", ExpiresAt: time.Now().Add(time.Minute)}
 
