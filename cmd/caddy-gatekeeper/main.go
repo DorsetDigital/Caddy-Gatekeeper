@@ -33,7 +33,15 @@ func main() {
 		MailSender: buildMailSender(),
 	})
 	log.Printf("caddy-gatekeeper listening on %s", addr)
-	log.Fatal(http.ListenAndServe(addr, app.Handler()))
+	httpServer:=&http.Server{
+		Addr:addr,
+		Handler:app.Handler(),
+		ReadHeaderTimeout:5*time.Second,
+		ReadTimeout:10*time.Second,
+		WriteTimeout:15*time.Second,
+		IdleTimeout:60*time.Second,
+	}
+	log.Fatal(httpServer.ListenAndServe())
 }
 
 func buildMailSender() maildelivery.Sender {
