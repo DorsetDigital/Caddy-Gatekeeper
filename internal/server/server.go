@@ -71,6 +71,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) startChallenge(w http.ResponseWriter, r *http.Request) {
+	r.Body=http.MaxBytesReader(w,r.Body,16<<10)
 	if err := r.ParseForm(); err != nil { http.Error(w, "Invalid request", http.StatusBadRequest); return }
 	email := normaliseIdentity(r.FormValue("email"))
 	returnURL := safeReturnURL(r.FormValue("return"))
@@ -99,6 +100,7 @@ func (s *Server) verify(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) completeChallenge(w http.ResponseWriter, r *http.Request) {
+	r.Body=http.MaxBytesReader(w,r.Body,16<<10)
 	if err := r.ParseForm(); err != nil { http.Error(w, "Invalid request", http.StatusBadRequest); return }
 	id, code := r.FormValue("id"), strings.TrimSpace(r.FormValue("code"))
 	result, err := s.config.Store.VerifyChallenge(r.Context(), id, hashBytes(code), s.config.MaxAttempts)
@@ -161,7 +163,7 @@ func hashBytes(value string)[]byte{h:=hashValue(value);return h[:]}
 func hashString(value string)string{return fmt.Sprintf("%x",hashValue(value))}
 
 func render(w http.ResponseWriter,source string,data any){t:=template.Must(template.New("page").Parse(source));w.Header().Set("Content-Type","text/html; charset=utf-8");_ = t.Execute(w,data)}
-func securityHeaders(next http.Handler)http.Handler{return http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){w.Header().Set("X-Content-Type-Options","nosniff");w.Header().Set("X-Frame-Options","DENY");w.Header().Set("Referrer-Policy","no-referrer");next.ServeHTTP(w,r)})}
+func securityHeaders(next http.Handler)http.Handler{return http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){w.Header().Set("X-Content-Type-Options","nosniff");w.Header().Set("X-Frame-Options","DENY");w.Header().Set("Referrer-Policy","no-referrer");w.Header().Set("Cache-Control","no-store");next.ServeHTTP(w,r)})}
 
 const style="<style>body{font-family:system-ui,sans-serif;background:#f5f6f8;color:#20242a;margin:0}main{max-width:28rem;margin:12vh auto;background:white;padding:2rem;border-radius:.75rem;box-shadow:0 8px 30px #0001}h1{margin-top:0}label{display:block;margin:.75rem 0 .35rem}input{box-sizing:border-box;width:100%;padding:.8rem;font:inherit}button{margin-top:1rem;padding:.8rem 1rem;font:inherit;cursor:pointer}p{line-height:1.5;color:#505760}</style>"
 const loginTemplate=`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">`+style+`<title>Access required</title></head><body><main><h1>Access required</h1><p>Enter your authorised email address. If it has access, we'll send you a one-time code.</p><form method="post" action="/.gatekeeper/login"><input type="hidden" name="return" value="{{.ReturnURL}}"><label for="email">Email address</label><input id="email" name="email" type="email" autocomplete="email" required autofocus><button type="submit">Send access code</button></form></main></body></html>`
