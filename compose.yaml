@@ -1,0 +1,24 @@
+services:
+  gatekeeper:
+    build: .
+    environment:
+      GATEKEEPER_LISTEN: ":9080"
+      GATEKEEPER_ALLOWED_EMAIL: "developer@example.test"
+      GATEKEEPER_COOKIE_SECURE: "false"
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./dev/Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      - gatekeeper
+
+  valkey:
+    image: valkey/valkey:8-alpine
+
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "8025:8025"
