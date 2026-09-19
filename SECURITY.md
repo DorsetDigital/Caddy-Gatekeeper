@@ -32,9 +32,9 @@ Caddy Gatekeeper is an internet-facing authentication boundary. Security-sensiti
 ### Trusted devices
 - [x] Cryptographically random opaque credentials.
 - [x] HttpOnly, SameSite cookies; Secure configurable for local HTTP development.
-- [ ] Store only hashes of trusted-device credentials.\n- [x] Provide keyed HMAC identity IDs so runtime state need not use plaintext email addresses.
+- [x] Store only hashes of trusted-device credentials.\n- [x] Provide keyed HMAC identity IDs so runtime state need not use plaintext email addresses.
 - [ ] Bind credentials to a site/hostname.
-- [ ] Sliding inactivity expiry with refresh no more than approximately once per day.
+- [x] Sliding inactivity expiry with refresh no more than approximately once per day for Store-backed devices.
 - [ ] Support independent device revocation and revoke-all for a user/site.
 - [ ] Never expose credentials in application/access logs.
 
@@ -59,7 +59,7 @@ Caddy Gatekeeper is an internet-facing authentication boundary. Security-sensiti
 ### State and infrastructure
 - [ ] Namespace all Valkey keys under gatekeeper:.
 - [ ] Prefer noeviction for security state.
-- [ ] Treat Valkey failure as fail-closed for protected resources.
+- [x] Store failures are treated as fail-closed for protected resources; verify this again with the Valkey implementation.
 - [ ] Configuration source of truth remains the management system; Valkey loss must not destroy configuration.
 - [ ] Shared counters/state must work consistently across all Gatekeeper instances.
 
