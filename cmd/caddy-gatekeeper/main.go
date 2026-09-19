@@ -7,7 +7,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/server"\n\t"github.com/DorsetDigital/Caddy-Gatekeeper/internal/identity"
+	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/identity"
+	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/server"
 )
 
 func main() {
@@ -17,7 +18,8 @@ func main() {
 		CookieName: "gatekeeper_device",
 		CookieSecure: env("GATEKEEPER_COOKIE_SECURE", "false") == "true",
 		DeviceLifetime: 30 * 24 * time.Hour,
-		MaxAttempts: envInt("GATEKEEPER_MAX_ATTEMPTS", 3),\n\t\tIdentityHasher: identity.NewHasher(requiredEnv("GATEKEEPER_IDENTITY_KEY")),
+		MaxAttempts: envInt("GATEKEEPER_MAX_ATTEMPTS", 3),
+		IdentityHasher: identity.NewHasher(requiredEnv("GATEKEEPER_IDENTITY_KEY")),
 	})
 	log.Printf("caddy-gatekeeper listening on %s", addr)
 	log.Fatal(http.ListenAndServe(addr, app.Handler()))
