@@ -7,7 +7,7 @@ Caddy Gatekeeper is an internet-facing authentication boundary. Security-sensiti
 - Protected routes fail closed when Gatekeeper cannot make an authentication decision.
 - OTP challenges expire after 10 minutes.
 - OTP values are generated with crypto/rand and stored as SHA-256 hashes.
-- A challenge permits at most five failed verification attempts and is then consumed.
+- A challenge permits only the configured number of failed verification attempts and is then consumed.
 - Successful OTP verification consumes the challenge, preventing replay.
 - Trusted-device tokens are cryptographically random.
 - Return URLs must be local absolute paths; external and protocol-relative redirects are rejected.
@@ -32,7 +32,7 @@ Caddy Gatekeeper is an internet-facing authentication boundary. Security-sensiti
 ### Trusted devices
 - [x] Cryptographically random opaque credentials.
 - [x] HttpOnly, SameSite cookies; Secure configurable for local HTTP development.
-- [ ] Store only hashes of trusted-device credentials.
+- [ ] Store only hashes of trusted-device credentials.\n- [x] Provide keyed HMAC identity IDs so runtime state need not use plaintext email addresses.
 - [ ] Bind credentials to a site/hostname.
 - [ ] Sliding inactivity expiry with refresh no more than approximately once per day.
 - [ ] Support independent device revocation and revoke-all for a user/site.
