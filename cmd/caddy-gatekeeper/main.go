@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/access"
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/identity"
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/server"
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/store"
@@ -21,7 +22,7 @@ func main() {
 	defer state.Close()
 
 	app := server.New(server.Config{
-		AllowedEmail: env("GATEKEEPER_ALLOWED_EMAIL", "developer@example.test"),
+		AccessMatcher: access.NewMatcher(developmentAccessRules()),
 		CookieName: "gatekeeper_device",
 		CookieSecure: env("GATEKEEPER_COOKIE_SECURE", "false") == "true",
 		DeviceLifetime: 30 * 24 * time.Hour,
@@ -31,6 +32,13 @@ func main() {
 	})
 	log.Printf("caddy-gatekeeper listening on %s", addr)
 	log.Fatal(http.ListenAndServe(addr, app.Handler()))
+}
+
+func developmentAccessRules() []access.Rule {
+	rules:=[]access.Rule{}
+	if value:=strings.TrimSpace(os.Getenv("GATEKEEPER_ALLOWED_EMAIL"));value!=""{rules=append(rules,access.Rule{Type:access.RuleEmail,Value:value})}
+	if value:=strings.TrimSpace(os.Getenv("GATEKEEPER_ALLOWED_DOMAIN"));value!=""{rules=append(rules,access.Rule{Type:access.RuleDomain,Value:value})}
+	return rules
 }
 
 func buildStore(ctx context.Context)(store.Store,error){
