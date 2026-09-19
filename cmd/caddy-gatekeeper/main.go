@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/server"
@@ -16,9 +17,20 @@ func main() {
 		CookieName: "gatekeeper_device",
 		CookieSecure: env("GATEKEEPER_COOKIE_SECURE", "false") == "true",
 		DeviceLifetime: 30 * 24 * time.Hour,
+		MaxAttempts: envInt("GATEKEEPER_MAX_ATTEMPTS", 3),
 	})
 	log.Printf("caddy-gatekeeper listening on %s", addr)
 	log.Fatal(http.ListenAndServe(addr, app.Handler()))
+}
+
+func envInt(name string, fallback int) int {
+	value := os.Getenv(name)
+	if value == "" { return fallback }
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < 1 {
+		log.Fatalf("%s must be a positive integer", name)
+	}
+	return parsed
 }
 
 func env(name, fallback string) string {
