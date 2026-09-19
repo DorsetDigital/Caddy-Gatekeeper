@@ -1,61 +1,39 @@
 package server
 
 import (
+	"context"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/identity"
+	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/store"
 )
 
-func TestSafeReturnURL(t *testing.T) {
-	tests := map[string]string{
-		"": "/",
-		"/admin": "/admin",
-		"/admin?foo=bar": "/admin?foo=bar",
-		"https://evil.test/x": "/",
-		"//evil.test/x": "/",
-	}
-	for input, expected := range tests {
-		if actual := safeReturnURL(input); actual != expected {
-			t.Fatalf("safeReturnURL(%q) = %q, want %q", input, actual, expected)
-		}
-	}
+func testServer() (*Server,*store.Memory) {
+	st:=store.NewMemory()
+	return New(Config{AllowedEmail:"developer@example.test",CookieName:"gatekeeper_device",DeviceLifetime:30*24*time.Hour,MaxAttempts:3,IdentityHasher:identity.NewHasher("test-key"),Store:st}),st
 }
 
-func TestChallengeLockedAfterConfiguredBadCodes(t *testing.T) {
-	s := New(Config{AllowedEmail: "developer@example.test", CookieName: "gatekeeper_device", DeviceLifetime: 30 * 24 * time.Hour, MaxAttempts: 3})
-	id := "challenge"
-	s.challenges[id] = challenge{Email: "developer@example.test", CodeHash: hashValue("123456"), ReturnURL: "/protected", ExpiresAt: time.Now().Add(time.Minute)}
+func TestSafeReturnURL(t *testing.T){tests:=map[string]string{"":"/","/admin":"/admin","/admin?foo=bar":"/admin?foo=bar","https://evil.test/x":"/","//evil.test/x":"/"};for input,expected:=range tests{if actual:=safeReturnURL(input);actual!=expected{t.Fatalf("safeReturnURL(%q) = %q, want %q",input,actual,expected)}}}
 
-	for attempt := 1; attempt <= 3; attempt++ {
-		form := url.Values{"id": {id}, "code": {"000000"}}
-		req := httptest.NewRequest("POST", "/verify", strings.NewReader(form.Encode()))
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		res := httptest.NewRecorder()
-		s.completeChallenge(res, req)
-	}
-
-	if _, ok := s.challenges[id]; ok {
-		t.Fatal("challenge still exists after configured failed attempts")
-	}
+func TestChallengeLockedAfterConfiguredBadCodes(t *testing.T){
+	s,st:=testServer();id:="challenge";hash:=hashValue("123456")
+	_ = st.CreateChallenge(context.Background(),id,store.Challenge{IdentityID:"identity",CodeHash:hash[:],ReturnURL:"/protected"},time.Minute)
+	for attempt:=1;attempt<=3;attempt++{form:=url.Values{"id":{id},"code":{"000000"}};req:=httptest.NewRequest("POST","/verify",strings.NewReader(form.Encode()));req.Header.Set("Content-Type","application/x-www-form-urlencoded");res:=httptest.NewRecorder();s.completeChallenge(res,req)}
+	if _,err:=st.GetChallenge(context.Background(),id);err==nil{t.Fatal("challenge still exists after configured failed attempts")}
 }
 
-func TestSuccessfulChallengeIsConsumed(t *testing.T) {
-	s := New(Config{AllowedEmail: "developer@example.test", CookieName: "gatekeeper_device", DeviceLifetime: 30 * 24 * time.Hour, MaxAttempts: 3})
-	id := "challenge"
-	s.challenges[id] = challenge{Email: "developer@example.test", CodeHash: hashValue("123456"), ReturnURL: "/protected", ExpiresAt: time.Now().Add(time.Minute)}
-
-	form := url.Values{"id": {id}, "code": {"123456"}}
-	req := httptest.NewRequest("POST", "/verify", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	res := httptest.NewRecorder()
-	s.completeChallenge(res, req)
-
-	if _, ok := s.challenges[id]; ok {
-		t.Fatal("challenge still exists after successful verification")
-	}
-	if res.Code != 302 {
-		t.Fatalf("status = %d, want 302", res.Code)
-	}
+func TestSuccessfulChallengeIsConsumedAndDeviceTokenIsHashed(t *testing.T){
+	s,st:=testServer();id:="challenge";hash:=hashValue("123456")
+	_ = st.CreateChallenge(context.Background(),id,store.Challenge{IdentityID:"identity",CodeHash:hash[:],ReturnURL:"/protected"},time.Minute)
+	form:=url.Values{"id":{id},"code":{"123456"}};req:=httptest.NewRequest("POST","/verify",strings.NewReader(form.Encode()));req.Header.Set("Content-Type","application/x-www-form-urlencoded");res:=httptest.NewRecorder();s.completeChallenge(res,req)
+	if _,err:=st.GetChallenge(context.Background(),id);err==nil{t.Fatal("challenge still exists after successful verification")}
+	if res.Code!=302{t.Fatalf("status = %d, want 302",res.Code)}
+	cookies:=res.Result().Cookies();if len(cookies)==0{t.Fatal("trusted-device cookie not set")}
+	raw:=cookies[0].Value
+	if _,err:=st.GetDevice(context.Background(),raw);err==nil{t.Fatal("raw browser credential was stored as device key")}
+	if _,err:=st.GetDevice(context.Background(),hashString(raw));err!=nil{t.Fatal("hashed browser credential was not stored")}
 }
