@@ -22,12 +22,12 @@ Caddy Gatekeeper is an internet-facing authentication boundary. Security-sensiti
 - [x] Cryptographically secure unbiased six-digit OTP generation.
 - [x] Hashed OTP storage.
 - [x] Make authorised and unauthorised email submissions indistinguishable in status, redirect and visible browser flow.
-- [ ] Prevent timing-based account enumeration: SMTP/external delivery must not sit on the synchronous response path for authorised addresses.
+- [x] Prevent timing-based account enumeration: SMTP/external delivery does not sit on the synchronous response path for authorised addresses.
 - [ ] Keep authorised and unauthorised request paths approximately equivalent in local work; do not rely on artificial fixed response delays as the primary defence.
 - [ ] Rate-limit OTP creation by site + email hash.
 - [ ] Rate-limit authentication attempts by site + IP and challenge.
 - [ ] Invalidate older outstanding challenges when appropriate.
-- [ ] Ensure challenge consumption and attempt counting are atomic in Valkey.
+- [x] Ensure challenge consumption and attempt counting are atomic in Valkey.
 
 ### Trusted devices
 - [x] Cryptographically random opaque credentials.
@@ -49,15 +49,15 @@ Caddy Gatekeeper is an internet-facing authentication boundary. Security-sensiti
 ### HTTP/application hardening
 - [x] Reject external return URLs.
 - [x] X-Content-Type-Options, X-Frame-Options and Referrer-Policy headers.
-- [ ] Request/body size limits.
-- [ ] Appropriate server read/write/header timeouts.
+- [x] Request/body size limits.
+- [x] Appropriate server read/write/header timeouts.
 - [ ] CSRF review for state-changing browser endpoints.
 - [ ] Prevent sensitive values and credentials entering logs.
 - [ ] Validate Host and site identifiers.
-- [ ] Review cache headers on authentication responses.
+- [x] Review cache headers on authentication responses.
 
 ### State and infrastructure
-- [ ] Namespace all Valkey keys under gatekeeper:.
+- [x] Namespace all Valkey keys under gatekeeper:.
 - [ ] Prefer noeviction for security state.
 - [x] Store failures are treated as fail-closed for protected resources; verify this again with the Valkey implementation.
 - [ ] Configuration source of truth remains the management system; Valkey loss must not destroy configuration.
@@ -72,3 +72,16 @@ Caddy Gatekeeper is an internet-facing authentication boundary. Security-sensiti
 ## Defence in depth outside this project
 
 General Caddy/WAF rate limiting is desirable for broad request/IP abuse and resource protection. Gatekeeper still requires authentication-aware rate limits because it can correlate site, email, challenge and device state across requests and nodes.
+
+
+## Adversarial load testing
+
+Before production, exercise the authentication boundary under concurrency rather than measuring only raw requests per second.
+
+- Hammer `/auth/check` with valid and invalid device cookies.
+- Submit one valid OTP concurrently; exactly one redemption may succeed.
+- Submit invalid OTPs concurrently; the configured attempt ceiling must remain authoritative.
+- Flood challenge creation and measure SMTP amplification before and after semantic rate limits.
+- Remove Valkey during protected traffic and verify fail-closed behaviour.
+- Remove SMTP during challenge creation and verify HTTP responsiveness and bounded resource use.
+- Restart Gatekeeper during traffic and verify Valkey-backed state survives.
