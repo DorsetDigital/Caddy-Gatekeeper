@@ -7,6 +7,10 @@ services:
       GATEKEEPER_COOKIE_SECURE: "false"
       GATEKEEPER_MAX_ATTEMPTS: "3"
       GATEKEEPER_IDENTITY_KEY: "development-only-identity-key"
+      GATEKEEPER_STORE: "valkey"
+      GATEKEEPER_VALKEY_MODE: "standalone"
+      GATEKEEPER_VALKEY_ADDRS: "valkey:6379"
+      GATEKEEPER_VALKEY_TLS: "false"
     depends_on:
       valkey:
         condition: service_healthy
