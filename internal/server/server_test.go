@@ -26,6 +26,12 @@ func TestChallengeLockedAfterConfiguredBadCodes(t *testing.T){
 	if _,err:=st.GetChallenge(context.Background(),id);err==nil{t.Fatal("challenge still exists after configured failed attempts")}
 }
 
+func TestExhaustedChallengePreservesReturnURL(t *testing.T){
+	s,st:=testServer();id:="challenge";hash:=hashValue("123456")
+	_ = st.CreateChallenge(context.Background(),id,store.Challenge{IdentityID:"identity",CodeHash:hash[:],ReturnURL:"/admin/pages/edit/show/123"},time.Minute)
+	for attempt:=1;attempt<=3;attempt++{form:=url.Values{"id":{id},"code":{"000000"}};req:=httptest.NewRequest("POST","/verify",strings.NewReader(form.Encode()));req.Header.Set("Content-Type","application/x-www-form-urlencoded");res:=httptest.NewRecorder();s.completeChallenge(res,req);if attempt==3&&!strings.Contains(res.Body.String(),"return=%2Fadmin%2Fpages%2Fedit%2Fshow%2F123"){t.Fatalf("start-again link lost original return URL: %s",res.Body.String())}}
+}
+
 func TestSuccessfulChallengeIsConsumedAndDeviceTokenIsHashed(t *testing.T){
 	s,st:=testServer();id:="challenge";hash:=hashValue("123456")
 	_ = st.CreateChallenge(context.Background(),id,store.Challenge{IdentityID:"identity",CodeHash:hash[:],ReturnURL:"/protected"},time.Minute)
