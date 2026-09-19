@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/server"
+	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/server"\n\t"github.com/DorsetDigital/Caddy-Gatekeeper/internal/identity"
 )
 
 func main() {
@@ -17,10 +17,16 @@ func main() {
 		CookieName: "gatekeeper_device",
 		CookieSecure: env("GATEKEEPER_COOKIE_SECURE", "false") == "true",
 		DeviceLifetime: 30 * 24 * time.Hour,
-		MaxAttempts: envInt("GATEKEEPER_MAX_ATTEMPTS", 3),
+		MaxAttempts: envInt("GATEKEEPER_MAX_ATTEMPTS", 3),\n\t\tIdentityHasher: identity.NewHasher(requiredEnv("GATEKEEPER_IDENTITY_KEY")),
 	})
 	log.Printf("caddy-gatekeeper listening on %s", addr)
 	log.Fatal(http.ListenAndServe(addr, app.Handler()))
+}
+
+func requiredEnv(name string) string {
+	value := os.Getenv(name)
+	if value == "" { log.Fatalf("%s is required", name) }
+	return value
 }
 
 func envInt(name string, fallback int) int {
