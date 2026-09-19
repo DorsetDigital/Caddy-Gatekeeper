@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"crypto/subtle"
 	"crypto/tls"
 	"encoding/base64"
 	"errors"
@@ -111,8 +110,3 @@ func decodeChallenge(values map[string]string)(Challenge,error){
 	return Challenge{IdentityID:values["identity"],CodeHash:code,ReturnURL:values["return"],Attempts:attempts},nil
 }
 
-// EqualHash is retained here for tests/diagnostics without exposing raw OTP values.
-func EqualHash(a,b []byte)bool{return subtle.ConstantTimeCompare(a,b)==1}
-
-type commandWithExpire interface{Err() error}
-func (c *Valkey) expireAfter(ctx context.Context,key string,ttl time.Duration)error{return c.client.Expire(ctx,key,ttl).Err()}
