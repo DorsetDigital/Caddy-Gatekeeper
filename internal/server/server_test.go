@@ -8,10 +8,15 @@ import (
 	"testing"
 	"time"
 
+	maildelivery "github.com/DorsetDigital/Caddy-Gatekeeper/internal/mail"
+
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/access"
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/identity"
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/store"
 )
+
+type captureSender struct { messages chan maildelivery.Message }
+func (s *captureSender) Send(_ context.Context,m maildelivery.Message) error { s.messages<-m;return nil }
 
 func testServer() (*Server,*store.Memory) {
 	st:=store.NewMemory()
@@ -43,4 +48,22 @@ func TestSuccessfulChallengeIsConsumedAndDeviceTokenIsHashed(t *testing.T){
 	raw:=cookies[0].Value
 	if _,err:=st.GetDevice(context.Background(),raw);err==nil{t.Fatal("raw browser credential was stored as device key")}
 	if _,err:=st.GetDevice(context.Background(),hashString(raw));err!=nil{t.Fatal("hashed browser credential was not stored")}
+}
+
+func TestAuthorizedIdentityQueuesOTPEmail(t *testing.T){
+	st:=store.NewMemory();sender:=&captureSender{messages:make(chan maildelivery.Message,1)}
+	s:=New(Config{AccessMatcher:access.NewMatcher([]access.Rule{{Type:access.RuleDomain,Value:"example.test"}}),CookieName:"gatekeeper_device",DeviceLifetime:time.Hour,MaxAttempts:3,IdentityHasher:identity.NewHasher("test-key"),Store:st,MailSender:sender})
+	form:=url.Values{"email":{"person@example.test"},"return":{"/protected"}}
+	req:=httptest.NewRequest("POST","http://site.test/login",strings.NewReader(form.Encode()));req.Header.Set("Content-Type","application/x-www-form-urlencoded");res:=httptest.NewRecorder();s.startChallenge(res,req)
+	if res.Code!=302{t.Fatalf("status=%d, want 302",res.Code)}
+	select{case msg:=<-sender.messages:if msg.To!="person@example.test"{t.Fatalf("recipient=%q",msg.To)};case <-time.After(time.Second):t.Fatal("OTP email was not queued")}
+}
+
+func TestUnauthorizedIdentityDoesNotSendEmail(t *testing.T){
+	st:=store.NewMemory();sender:=&captureSender{messages:make(chan maildelivery.Message,1)}
+	s:=New(Config{AccessMatcher:access.NewMatcher([]access.Rule{{Type:access.RuleDomain,Value:"example.test"}}),CookieName:"gatekeeper_device",DeviceLifetime:time.Hour,MaxAttempts:3,IdentityHasher:identity.NewHasher("test-key"),Store:st,MailSender:sender})
+	form:=url.Values{"email":{"person@other.test"},"return":{"/protected"}}
+	req:=httptest.NewRequest("POST","http://site.test/login",strings.NewReader(form.Encode()));req.Header.Set("Content-Type","application/x-www-form-urlencoded");res:=httptest.NewRecorder();s.startChallenge(res,req)
+	if res.Code!=302{t.Fatalf("status=%d, want 302",res.Code)}
+	select{case <-sender.messages:t.Fatal("email sent for unauthorized identity");case <-time.After(50*time.Millisecond):}
 }
