@@ -51,3 +51,20 @@ The same Go application can be run in a container for development and as a stati
 ## Security status
 
 This is not yet production-ready. Before production use the project will add persistent hashed device credentials, bounded OTP attempts, rate limiting, generic SMTP delivery, site-specific allow-lists, management APIs, audit logging and hardened proxy/header handling.
+
+
+## Adversarial testing
+
+The repository includes a small HTTP hammer for exercising Gatekeeper without requiring a separate benchmarking package:
+
+```bash
+go run ./cmd/gatekeeper-hammer -url http://localhost:8080/admin -n 10000 -c 100
+```
+
+This deliberately does not follow redirects, so an unauthenticated protected request returning Gatekeeper's redirect is counted as a successful response. Store-level concurrency tests also race OTP redemption and failed-attempt exhaustion:
+
+```bash
+go test -race ./...
+```
+
+The race-enabled test run is particularly important: a valid challenge submitted concurrently must succeed exactly once, and concurrent invalid submissions must not bypass the attempt ceiling.
