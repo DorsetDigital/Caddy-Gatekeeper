@@ -11,6 +11,7 @@ import (
 
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/access"
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/identity"
+	maildelivery "github.com/DorsetDigital/Caddy-Gatekeeper/internal/mail"
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/server"
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/store"
 )
@@ -29,9 +30,21 @@ func main() {
 		MaxAttempts: envInt("GATEKEEPER_MAX_ATTEMPTS", 3),
 		IdentityHasher: identity.NewHasher(requiredEnv("GATEKEEPER_IDENTITY_KEY")),
 		Store: state,
+		MailSender: buildMailSender(),
 	})
 	log.Printf("caddy-gatekeeper listening on %s", addr)
 	log.Fatal(http.ListenAndServe(addr, app.Handler()))
+}
+
+func buildMailSender() maildelivery.Sender {
+	addr:=strings.TrimSpace(os.Getenv("GATEKEEPER_SMTP_ADDR"))
+	if addr=="" { return nil }
+	return maildelivery.SMTP{
+		Addr:addr,
+		Username:os.Getenv("GATEKEEPER_SMTP_USERNAME"),
+		Password:os.Getenv("GATEKEEPER_SMTP_PASSWORD"),
+		From:env("GATEKEEPER_SMTP_FROM","gatekeeper@example.test"),
+	}
 }
 
 func developmentAccessRules() []access.Rule {
