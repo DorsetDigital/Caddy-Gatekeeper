@@ -15,12 +15,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/access"
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/identity"
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/store"
 )
 
 type Config struct {
-	AllowedEmail string
+	AccessMatcher access.Matcher
 	CookieName string
 	CookieSecure bool
 	DeviceLifetime time.Duration
@@ -72,7 +73,7 @@ func (s *Server) startChallenge(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil { http.Error(w, "Invalid request", http.StatusBadRequest); return }
 	email := normaliseIdentity(r.FormValue("email"))
 	returnURL := safeReturnURL(r.FormValue("return"))
-	authorised := email == normaliseIdentity(s.config.AllowedEmail)
+	authorised := s.config.AccessMatcher.Allowed(email)
 	id, code := randomToken(24), randomCode()
 	codeHash := hashValue(randomToken(32))
 	if authorised { codeHash = hashValue(code) }
