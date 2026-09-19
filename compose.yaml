@@ -5,7 +5,11 @@ services:
       GATEKEEPER_LISTEN: ":9080"
       GATEKEEPER_ALLOWED_EMAIL: "developer@example.test"
       GATEKEEPER_COOKIE_SECURE: "false"
-      GATEKEEPER_MAX_ATTEMPTS: "3"\n      GATEKEEPER_IDENTITY_KEY: "development-only-identity-key"
+      GATEKEEPER_MAX_ATTEMPTS: "3"
+      GATEKEEPER_IDENTITY_KEY: "development-only-identity-key"
+    depends_on:
+      valkey:
+        condition: service_healthy
 
   caddy:
     image: caddy:2-alpine
@@ -18,8 +22,19 @@ services:
 
   valkey:
     image: valkey/valkey:8-alpine
+    command: valkey-server --appendonly yes
+    volumes:
+      - valkey-data:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
 
   mailpit:
     image: axllent/mailpit:latest
     ports:
       - "8025:8025"
+
+volumes:
+  valkey-data:
