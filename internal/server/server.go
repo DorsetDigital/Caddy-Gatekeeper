@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -89,7 +88,7 @@ func (s *Server) startChallenge(w http.ResponseWriter, r *http.Request) {
 func (s *Server) verify(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
 	_, err := s.config.Store.GetChallenge(r.Context(), id)
-	if errors.Is(err, store.ErrNotFound) { render(w, expiredTemplate, nil); return }
+	if errors.Is(err, store.ErrNotFound) { render(w, expiredTemplate, map[string]string{"ReturnURL": "/"}); return }
 	if err != nil { http.Error(w, "Gatekeeper state unavailable", http.StatusServiceUnavailable); return }
 	render(w, verifyTemplate, map[string]string{"ID": id})
 }
@@ -97,18 +96,25 @@ func (s *Server) verify(w http.ResponseWriter, r *http.Request) {
 func (s *Server) completeChallenge(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil { http.Error(w, "Invalid request", http.StatusBadRequest); return }
 	id, code := r.FormValue("id"), strings.TrimSpace(r.FormValue("code"))
-	ch, err := s.config.Store.GetChallenge(r.Context(), id)
-	if errors.Is(err, store.ErrNotFound) { render(w, expiredTemplate, nil); return }
+	result, err := s.config.Store.VerifyChallenge(r.Context(), id, hashBytes(code), s.config.MaxAttempts)
 	if err != nil { http.Error(w, "Gatekeeper state unavailable", http.StatusServiceUnavailable); return }
-
-	if subtle.ConstantTimeCompare(hashBytes(code), ch.CodeHash) != 1 {
-		remaining, exhausted, err := s.config.Store.RecordFailedAttempt(r.Context(), id, s.config.MaxAttempts)
-		if errors.Is(err, store.ErrNotFound) || exhausted { render(w, expiredTemplate, nil); return }
-		if err != nil { http.Error(w, "Gatekeeper state unavailable", http.StatusServiceUnavailable); return }
-		render(w, invalidCodeTemplate, map[string]any{"ID": id, "AttemptsLeft": remaining})
+	switch result.Status {
+	case store.VerifyNotFound:
+		render(w, expiredTemplate, map[string]string{"ReturnURL": "/"})
+		return
+	case store.VerifyInvalid:
+		render(w, invalidCodeTemplate, map[string]any{"ID": id, "AttemptsLeft": result.Remaining})
+		return
+	case store.VerifyExhausted:
+		render(w, expiredTemplate, map[string]string{"ReturnURL": result.Challenge.ReturnURL})
+		return
+	case store.VerifySuccess:
+		// Continue below with the challenge that was atomically consumed.
+	default:
+		http.Error(w, "Gatekeeper state unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	if err := s.config.Store.ConsumeChallenge(r.Context(), id); err != nil { http.Error(w, "Gatekeeper state unavailable", http.StatusServiceUnavailable); return }
+	ch := result.Challenge
 
 	token := randomToken(32)
 	tokenHash := hashString(token)
@@ -156,4 +162,4 @@ const style="<style>body{font-family:system-ui,sans-serif;background:#f5f6f8;col
 const loginTemplate=`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">`+style+`<title>Access required</title></head><body><main><h1>Access required</h1><p>Enter your authorised email address. If it has access, we'll send you a one-time code.</p><form method="post" action="/.gatekeeper/login"><input type="hidden" name="return" value="{{.ReturnURL}}"><label for="email">Email address</label><input id="email" name="email" type="email" autocomplete="email" required autofocus><button type="submit">Send access code</button></form></main></body></html>`
 const verifyTemplate=`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">`+style+`<title>Enter access code</title></head><body><main><h1>Check your email</h1><p>Enter the access code from your email. It expires after 10 minutes.</p><form method="post" action="/.gatekeeper/verify"><input type="hidden" name="id" value="{{.ID}}"><label for="code">Access code</label><input id="code" name="code" autocomplete="one-time-code" required autofocus><button type="submit">Continue</button></form></main></body></html>`
 const invalidCodeTemplate=`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">`+style+`<title>Invalid access code</title></head><body><main><h1>That code was not accepted</h1><p>Please check the code and try again. You have {{.AttemptsLeft}} attempts remaining.</p><form method="post" action="/.gatekeeper/verify"><input type="hidden" name="id" value="{{.ID}}"><label for="code">Access code</label><input id="code" name="code" autocomplete="one-time-code" required autofocus><button type="submit">Continue</button></form></main></body></html>`
-const expiredTemplate=`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">`+style+`<title>Request a new code</title></head><body><main><h1>Request a new code</h1><p>This access challenge has expired or can no longer be used.</p><p><a href="/.gatekeeper/login">Start again</a></p></main></body></html>`
+const expiredTemplate=`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">`+style+`<title>Request a new code</title></head><body><main><h1>Request a new code</h1><p>This access challenge has expired or can no longer be used.</p><p><a href="/.gatekeeper/login?return={{urlquery .ReturnURL}}">Start again</a></p></main></body></html>`
