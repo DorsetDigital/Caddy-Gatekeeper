@@ -78,17 +78,22 @@ func (s *Server) startChallenge(w http.ResponseWriter, r *http.Request) {
 	email := strings.TrimSpace(strings.ToLower(r.FormValue("email")))
 	returnURL := safeReturnURL(r.FormValue("return"))
 
-	// Do not reveal whether an address is authorised.
-	if subtle.ConstantTimeCompare([]byte(email), []byte(strings.ToLower(s.config.AllowedEmail))) != 1 {
-		render(w, sentTemplate, nil)
-		return
+	authorised := subtle.ConstantTimeCompare([]byte(email), []byte(strings.ToLower(s.config.AllowedEmail))) == 1
+	id, code := randomToken(24), randomCode()
+
+	// Always create a challenge and follow the same browser flow. For an
+	// unauthorised address the challenge is deliberately unverifiable.
+	codeHash := hashValue(randomToken(32))
+	if authorised {
+		codeHash = hashValue(code)
 	}
 
-	id, code := randomToken(24), randomCode()
 	s.mu.Lock()
-	s.challenges[id] = challenge{Email: email, CodeHash: hashValue(code), ReturnURL: returnURL, ExpiresAt: time.Now().Add(10 * time.Minute)}
+	s.challenges[id] = challenge{Email: email, CodeHash: codeHash, ReturnURL: returnURL, ExpiresAt: time.Now().Add(10 * time.Minute)}
 	s.mu.Unlock()
-	log.Printf("development OTP for %s: %s", email, code)
+	if authorised {
+		log.Printf("development OTP for %s: %s", email, code)
+	}
 	http.Redirect(w, r, "/.gatekeeper/verify?id="+url.QueryEscape(id), http.StatusFound)
 }
 
@@ -209,7 +214,6 @@ func securityHeaders(next http.Handler) http.Handler {
 const style = "<style>body{font-family:system-ui,sans-serif;background:#f5f6f8;color:#20242a;margin:0}main{max-width:28rem;margin:12vh auto;background:white;padding:2rem;border-radius:.75rem;box-shadow:0 8px 30px #0001}h1{margin-top:0}label{display:block;margin:.75rem 0 .35rem}input{box-sizing:border-box;width:100%;padding:.8rem;font:inherit}button{margin-top:1rem;padding:.8rem 1rem;font:inherit;cursor:pointer}p{line-height:1.5;color:#505760}</style>"
 
 const loginTemplate = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">`+style+`<title>Access required</title></head><body><main><h1>Access required</h1><p>Enter your authorised email address. If it has access, we'll send you a one-time code.</p><form method="post" action="/.gatekeeper/login"><input type="hidden" name="return" value="{{.ReturnURL}}"><label for="email">Email address</label><input id="email" name="email" type="email" autocomplete="email" required autofocus><button type="submit">Send access code</button></form></main></body></html>`
-const verifyTemplate = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">`+style+`<title>Enter access code</title></head><body><main><h1>Check your email</h1><p>Enter the six-digit access code. It expires after 10 minutes.</p><form method="post" action="/.gatekeeper/verify"><input type="hidden" name="id" value="{{.ID}}"><label for="code">Access code</label><input id="code" name="code" inputmode="numeric" pattern="[0-9]{6}" autocomplete="one-time-code" required autofocus><button type="submit">Continue</button></form></main></body></html>`
-const invalidCodeTemplate = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">`+style+`<title>Invalid access code</title></head><body><main><h1>That code was not accepted</h1><p>Please check the code and try again. You have {{.AttemptsLeft}} attempts remaining.</p><form method="post" action="/.gatekeeper/verify"><input type="hidden" name="id" value="{{.ID}}"><label for="code">Access code</label><input id="code" name="code" inputmode="numeric" pattern="[0-9]{6}" autocomplete="one-time-code" required autofocus><button type="submit">Continue</button></form></main></body></html>`
+const verifyTemplate = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">`+style+`<title>Enter access code</title></head><body><main><h1>Check your email</h1><p>Enter the access code from your email. It expires after 10 minutes.</p><form method="post" action="/.gatekeeper/verify"><input type="hidden" name="id" value="{{.ID}}"><label for="code">Access code</label><input id="code" name="code" autocomplete="one-time-code" required autofocus><button type="submit">Continue</button></form></main></body></html>`
+const invalidCodeTemplate = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">`+style+`<title>Invalid access code</title></head><body><main><h1>That code was not accepted</h1><p>Please check the code and try again. You have {{.AttemptsLeft}} attempts remaining.</p><form method="post" action="/.gatekeeper/verify"><input type="hidden" name="id" value="{{.ID}}"><label for="code">Access code</label><input id="code" name="code" autocomplete="one-time-code" required autofocus><button type="submit">Continue</button></form></main></body></html>`
 const expiredTemplate = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">`+style+`<title>Request a new code</title></head><body><main><h1>Request a new code</h1><p>This access challenge has expired or can no longer be used.</p><p><a href="/.gatekeeper/login">Start again</a></p></main></body></html>`
-const sentTemplate = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">`+style+`<title>Check your email</title></head><body><main><h1>Check your email</h1><p>If that address is authorised, an access code has been sent. You can safely close this page if you didn't request access.</p></main></body></html>`
