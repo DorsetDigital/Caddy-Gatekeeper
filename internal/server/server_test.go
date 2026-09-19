@@ -8,13 +8,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/access"
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/identity"
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/store"
 )
 
 func testServer() (*Server,*store.Memory) {
 	st:=store.NewMemory()
-	return New(Config{AllowedEmail:"developer@example.test",CookieName:"gatekeeper_device",DeviceLifetime:30*24*time.Hour,MaxAttempts:3,IdentityHasher:identity.NewHasher("test-key"),Store:st}),st
+	return New(Config{AccessMatcher:access.NewMatcher([]access.Rule{{Type:access.RuleEmail,Value:"developer@example.test"}}),CookieName:"gatekeeper_device",DeviceLifetime:30*24*time.Hour,MaxAttempts:3,IdentityHasher:identity.NewHasher("test-key"),Store:st}),st
 }
 
 func TestSafeReturnURL(t *testing.T){tests:=map[string]string{"":"/","/admin":"/admin","/admin?foo=bar":"/admin?foo=bar","https://evil.test/x":"/","//evil.test/x":"/"};for input,expected:=range tests{if actual:=safeReturnURL(input);actual!=expected{t.Fatalf("safeReturnURL(%q) = %q, want %q",input,actual,expected)}}}
