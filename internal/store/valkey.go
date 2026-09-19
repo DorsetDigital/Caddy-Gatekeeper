@@ -43,8 +43,10 @@ func(v *Valkey)deviceKey(id string)string{return v.prefix+"device:"+id}
 
 func(v *Valkey)CreateChallenge(ctx context.Context,id string,ch Challenge,ttl time.Duration)error{
 	key:=v.challengeKey(id)
-	if err:=v.client.HSet(ctx,key,map[string]any{"identity":ch.IdentityID,"code":base64.RawStdEncoding.EncodeToString(ch.CodeHash),"return":ch.ReturnURL,"attempts":ch.Attempts}).Err();err!=nil{return err}
-	return v.client.Expire(ctx,key,ttl).Err()
+	pipe:=v.client.TxPipeline()
+	pipe.HSet(ctx,key,map[string]any{"identity":ch.IdentityID,"code":base64.RawStdEncoding.EncodeToString(ch.CodeHash),"return":ch.ReturnURL,"attempts":ch.Attempts})
+	pipe.Expire(ctx,key,ttl)
+	_,err:=pipe.Exec(ctx);return err
 }
 
 func(v *Valkey)GetChallenge(ctx context.Context,id string)(Challenge,error){
@@ -89,17 +91,25 @@ func(v *Valkey)VerifyChallenge(ctx context.Context,id string,submitted []byte,ma
 
 func(v *Valkey)CreateDevice(ctx context.Context,id string,d Device,ttl time.Duration)error{
 	key:=v.deviceKey(id)
-	if err:=v.client.HSet(ctx,key,map[string]any{"identity":d.IdentityID,"last_seen":d.LastSeen.Unix()}).Err();err!=nil{return err}
-	return v.client.Expire(ctx,key,ttl).Err()
+	pipe:=v.client.TxPipeline()
+	pipe.HSet(ctx,key,map[string]any{"identity":d.IdentityID,"last_seen":d.LastSeen.Unix()})
+	pipe.Expire(ctx,key,ttl)
+	_,err:=pipe.Exec(ctx);return err
 }
 func(v *Valkey)GetDevice(ctx context.Context,id string)(Device,error){
 	values,err:=v.client.HGetAll(ctx,v.deviceKey(id)).Result();if err!=nil{return Device{},err};if len(values)==0{return Device{},ErrNotFound}
 	last,err:=strconv.ParseInt(values["last_seen"],10,64);if err!=nil{return Device{},err}
 	return Device{IdentityID:values["identity"],LastSeen:time.Unix(last,0)},nil
 }
+var refreshDeviceScript=redis.NewScript(`
+if redis.call('EXISTS', KEYS[1]) == 0 then return 0 end
+redis.call('HSET', KEYS[1], 'last_seen', ARGV[1])
+redis.call('PEXPIRE', KEYS[1], ARGV[2])
+return 1
+`)
 func(v *Valkey)RefreshDevice(ctx context.Context,id string,d Device,ttl time.Duration)error{
-	key:=v.deviceKey(id);exists,err:=v.client.Exists(ctx,key).Result();if err!=nil{return err};if exists==0{return ErrNotFound}
-	pipe:=v.client.TxPipeline();pipe.HSet(ctx,key,"last_seen",d.LastSeen.Unix());pipe.Expire(ctx,key,ttl);_,err=pipe.Exec(ctx);return err
+	result,err:=refreshDeviceScript.Run(ctx,v.client,[]string{v.deviceKey(id)},d.LastSeen.Unix(),ttl.Milliseconds()).Int()
+	if err!=nil{return err};if result==0{return ErrNotFound};return nil
 }
 func(v *Valkey)DeleteDevice(ctx context.Context,id string)error{return v.client.Del(ctx,v.deviceKey(id)).Err()}
 func(v *Valkey)Close()error{return v.client.Close()}
