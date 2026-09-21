@@ -77,12 +77,12 @@ func(v *Valkey)VerifyChallenge(ctx context.Context,id string,submitted []byte,ma
 	switch status{
 	case "notfound":return VerifyResult{Status:VerifyNotFound},nil
 	case "success","exhausted":
-		if len(items)<5{return VerifyResult{},errors.New("incomplete Valkey verification response")}
+		if len(items)<4{return VerifyResult{},errors.New("incomplete Valkey verification response")}
 		ch:=Challenge{SiteID:fmt.Sprint(items[1]),IdentityID:fmt.Sprint(items[2]),ReturnURL:fmt.Sprint(items[3])}
 		if status=="success"{return VerifyResult{Status:VerifySuccess,Challenge:ch},nil}
 		return VerifyResult{Status:VerifyExhausted,Challenge:ch},nil
 	case "invalid":
-		if len(items)<4{return VerifyResult{},errors.New("incomplete Valkey verification response")}
+		if len(items)<5{return VerifyResult{},errors.New("incomplete Valkey verification response")}
 		remaining,err:=strconv.Atoi(fmt.Sprint(items[1]));if err!=nil{return VerifyResult{},err}
 		return VerifyResult{Status:VerifyInvalid,Remaining:remaining,Challenge:Challenge{SiteID:fmt.Sprint(items[2]),IdentityID:fmt.Sprint(items[3]),ReturnURL:fmt.Sprint(items[4])}},nil
 	default:return VerifyResult{},errors.New("unknown Valkey verification response")
