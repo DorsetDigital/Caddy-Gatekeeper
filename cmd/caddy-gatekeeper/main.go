@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/access"
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/identity"
 	maildelivery "github.com/DorsetDigital/Caddy-Gatekeeper/internal/mail"
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/server"
@@ -34,7 +33,6 @@ func main() {
 	}()
 
 	app := server.New(server.Config{
-		AccessMatcher: access.NewMatcher(developmentAccessRules()),
 		Sites: sites,
 		CookieName: "gatekeeper_device",
 		CookieSecure: env("GATEKEEPER_COOKIE_SECURE", "false") == "true",
@@ -65,13 +63,6 @@ func buildMailSender() maildelivery.Sender {
 		Password:os.Getenv("GATEKEEPER_SMTP_PASSWORD"),
 		From:env("GATEKEEPER_SMTP_FROM","gatekeeper@example.test"),
 	}
-}
-
-func developmentAccessRules() []access.Rule {
-	rules:=[]access.Rule{}
-	if value:=strings.TrimSpace(os.Getenv("GATEKEEPER_ALLOWED_EMAIL"));value!=""{rules=append(rules,access.Rule{Type:access.RuleEmail,Value:value})}
-	if value:=strings.TrimSpace(os.Getenv("GATEKEEPER_ALLOWED_DOMAIN"));value!=""{rules=append(rules,access.Rule{Type:access.RuleDomain,Value:value})}
-	return rules
 }
 
 func buildStore(ctx context.Context)(store.Store,error){
