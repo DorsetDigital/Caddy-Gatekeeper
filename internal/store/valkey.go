@@ -31,9 +31,12 @@ func NewValkey(ctx context.Context,cfg ValkeyConfig)(*Valkey,error){
 	if len(cfg.Addrs)==0{return nil,errors.New("at least one Valkey address is required")}
 	var tlsConfig *tls.Config
 	if cfg.TLS { tlsConfig=&tls.Config{MinVersion:tls.VersionTLS12} }
-	opts:=&redis.UniversalOptions{Addrs:cfg.Addrs,Username:cfg.Username,Password:cfg.Password,TLSConfig:tlsConfig}
-	if strings.EqualFold(cfg.Mode,"cluster"){opts.DB=0}
-	client:=redis.NewUniversalClient(opts)
+	var client redis.UniversalClient
+	if strings.EqualFold(cfg.Mode,"cluster"){
+		client=redis.NewClusterClient(&redis.ClusterOptions{Addrs:cfg.Addrs,Username:cfg.Username,Password:cfg.Password,TLSConfig:tlsConfig})
+	}else{
+		client=redis.NewClient(&redis.Options{Addr:cfg.Addrs[0],Username:cfg.Username,Password:cfg.Password,TLSConfig:tlsConfig})
+	}
 	if err:=client.Ping(ctx).Err();err!=nil{_ = client.Close();return nil,fmt.Errorf("connect to Valkey: %w",err)}
 	prefix:=cfg.Prefix;if prefix==""{prefix="gatekeeper:"}
 	return &Valkey{client:client,prefix:prefix},nil
