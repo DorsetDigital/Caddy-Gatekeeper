@@ -5,8 +5,6 @@ services:
       GATEKEEPER_LISTEN: ":9080"
       GATEKEEPER_API_LISTEN: ":9081"
       GATEKEEPER_API_TOKEN: "development-management-token"
-      GATEKEEPER_ALLOWED_EMAIL: "developer@example.test"
-      GATEKEEPER_ALLOWED_DOMAIN: "example.test"
       GATEKEEPER_COOKIE_SECURE: "false"
       GATEKEEPER_MAX_ATTEMPTS: "3"
       GATEKEEPER_IDENTITY_KEY: "development-only-identity-key"
