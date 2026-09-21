@@ -18,10 +18,12 @@ import (
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/identity"
 	maildelivery "github.com/DorsetDigital/Caddy-Gatekeeper/internal/mail"
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/store"
+	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/site"
 )
 
 type Config struct {
 	AccessMatcher access.Matcher
+	Sites site.Repository
 	CookieName string
 	CookieSecure bool
 	DeviceLifetime time.Duration
@@ -59,7 +61,7 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(
 
 func (s *Server) check(w http.ResponseWriter, r *http.Request) {
 	if cookie, err := r.Cookie(s.config.CookieName); err == nil {
-		ok, storeErr := s.validDevice(r.Context(), cookie.Value)
+		ok, storeErr := s.validDevice(r.Context(), cookie.Value, r.Host)
 		if storeErr != nil { http.Error(w, "Gatekeeper state unavailable", http.StatusServiceUnavailable); return }
 		if ok { w.WriteHeader(http.StatusNoContent); return }
 	}
@@ -75,12 +77,19 @@ func (s *Server) startChallenge(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil { http.Error(w, "Invalid request", http.StatusBadRequest); return }
 	email := normaliseIdentity(r.FormValue("email"))
 	returnURL := safeReturnURL(r.FormValue("return"))
-	authorised := s.config.AccessMatcher.Allowed(email)
+	matcher:=s.config.AccessMatcher
+	var siteID string
+	if s.config.Sites!=nil {
+		configured,err:=s.config.Sites.GetByHost(r.Context(),r.Host)
+		if err!=nil&&!errors.Is(err,site.ErrNotFound){http.Error(w,"Gatekeeper configuration unavailable",http.StatusServiceUnavailable);return}
+		if err==nil{matcher=access.NewMatcher(configured.AccessRules);siteID=configured.ID}
+	}
+	authorised := matcher.Allowed(email)
 	id, code := randomToken(24), randomCode()
 	codeHash := hashValue(randomToken(32))
 	if authorised { codeHash = hashValue(code) }
 
-	ch := store.Challenge{IdentityID: s.config.IdentityHasher.ID(email), CodeHash: codeHash[:], ReturnURL: returnURL}
+	ch := store.Challenge{SiteID: siteID, IdentityID: s.config.IdentityHasher.ID(email), CodeHash: codeHash[:], ReturnURL: returnURL}
 	if err := s.config.Store.CreateChallenge(r.Context(), id, ch, s.config.ChallengeLifetime); err != nil {
 		http.Error(w, "Gatekeeper state unavailable", http.StatusServiceUnavailable); return
 	}
@@ -126,7 +135,7 @@ func (s *Server) completeChallenge(w http.ResponseWriter, r *http.Request) {
 	token := randomToken(32)
 	tokenHash := hashString(token)
 	now := time.Now()
-	if err := s.config.Store.CreateDevice(r.Context(), tokenHash, store.Device{IdentityID: ch.IdentityID, LastSeen: now}, s.config.DeviceLifetime); err != nil {
+	if err := s.config.Store.CreateDevice(r.Context(), tokenHash, store.Device{SiteID: ch.SiteID, IdentityID: ch.IdentityID, LastSeen: now}, s.config.DeviceLifetime); err != nil {
 		http.Error(w, "Gatekeeper state unavailable", http.StatusServiceUnavailable); return
 	}
 	http.SetCookie(w, &http.Cookie{Name:s.config.CookieName,Value:token,Path:"/",HttpOnly:true,Secure:s.config.CookieSecure,SameSite:http.SameSiteLaxMode,MaxAge:int(s.config.DeviceLifetime.Seconds())})
@@ -141,11 +150,16 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) validDevice(ctx context.Context, token string) (bool,error) {
+func (s *Server) validDevice(ctx context.Context, token string, host string) (bool,error) {
 	key := hashString(token)
 	d,err := s.config.Store.GetDevice(ctx,key)
 	if errors.Is(err,store.ErrNotFound){return false,nil}
 	if err != nil{return false,err}
+	if s.config.Sites!=nil {
+		configured,siteErr:=s.config.Sites.GetByHost(ctx,host)
+		if errors.Is(siteErr,site.ErrNotFound)||siteErr==nil&&configured.ID!=d.SiteID{return false,nil}
+		if siteErr!=nil{return false,siteErr}
+	}
 	if time.Since(d.LastSeen) >= s.config.DeviceRefreshInterval {
 		d.LastSeen=time.Now()
 		if err:=s.config.Store.RefreshDevice(ctx,key,d,s.config.DeviceLifetime);err!=nil{return false,err}
