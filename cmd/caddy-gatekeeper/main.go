@@ -13,6 +13,8 @@ import (
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/identity"
 	maildelivery "github.com/DorsetDigital/Caddy-Gatekeeper/internal/mail"
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/server"
+	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/management"
+	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/site"
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/store"
 )
 
@@ -21,9 +23,19 @@ func main() {
 	state, err := buildStore(context.Background())
 	if err != nil { log.Fatalf("initialise state store: %v", err) }
 	defer state.Close()
+	var sites site.Repository
+	if valkeyStore,ok:=state.(*store.Valkey);ok{sites=site.NewValkey(valkeyStore.Client(),valkeyStore.Prefix())}else{sites=site.NewMemory()}
+	apiAddr:=env("GATEKEEPER_API_LISTEN",":9081")
+	api:=management.New(sites,requiredEnv("GATEKEEPER_API_TOKEN"))
+	go func(){
+		log.Printf("caddy-gatekeeper management API listening on %s",apiAddr)
+		apiServer:=&http.Server{Addr:apiAddr,Handler:api.Handler(),ReadHeaderTimeout:5*time.Second,ReadTimeout:10*time.Second,WriteTimeout:15*time.Second,IdleTimeout:60*time.Second}
+		if err:=apiServer.ListenAndServe();err!=nil&&err!=http.ErrServerClosed{log.Fatalf("management API: %v",err)}
+	}()
 
 	app := server.New(server.Config{
 		AccessMatcher: access.NewMatcher(developmentAccessRules()),
+		Sites: sites,
 		CookieName: "gatekeeper_device",
 		CookieSecure: env("GATEKEEPER_COOKIE_SECURE", "false") == "true",
 		DeviceLifetime: 30 * 24 * time.Hour,
