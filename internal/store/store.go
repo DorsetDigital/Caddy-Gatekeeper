@@ -9,6 +9,7 @@ import (
 var ErrNotFound = errors.New("gatekeeper state not found")
 
 type Challenge struct {
+	SiteID string
 	IdentityID string
 	CodeHash []byte
 	ReturnURL string
@@ -29,6 +30,7 @@ type VerifyResult struct {
 }
 
 type Device struct {
+	SiteID string
 	IdentityID string
 	LastSeen time.Time
 }
