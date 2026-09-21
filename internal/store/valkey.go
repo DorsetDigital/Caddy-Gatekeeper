@@ -112,6 +112,8 @@ func(v *Valkey)RefreshDevice(ctx context.Context,id string,d Device,ttl time.Dur
 	if err!=nil{return err};if result==0{return ErrNotFound};return nil
 }
 func(v *Valkey)DeleteDevice(ctx context.Context,id string)error{return v.client.Del(ctx,v.deviceKey(id)).Err()}
+func(v *Valkey)Client()redis.UniversalClient{return v.client}
+func(v *Valkey)Prefix()string{return v.prefix}
 func(v *Valkey)Close()error{return v.client.Close()}
 
 func decodeChallenge(values map[string]string)(Challenge,error){
