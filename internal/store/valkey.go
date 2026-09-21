@@ -44,7 +44,7 @@ func(v *Valkey)deviceKey(id string)string{return v.prefix+"device:"+id}
 func(v *Valkey)CreateChallenge(ctx context.Context,id string,ch Challenge,ttl time.Duration)error{
 	key:=v.challengeKey(id)
 	pipe:=v.client.TxPipeline()
-	pipe.HSet(ctx,key,map[string]any{"identity":ch.IdentityID,"code":base64.RawStdEncoding.EncodeToString(ch.CodeHash),"return":ch.ReturnURL,"attempts":ch.Attempts})
+	pipe.HSet(ctx,key,map[string]any{"site":ch.SiteID,"identity":ch.IdentityID,"code":base64.RawStdEncoding.EncodeToString(ch.CodeHash),"return":ch.ReturnURL,"attempts":ch.Attempts})
 	pipe.Expire(ctx,key,ttl)
 	_,err:=pipe.Exec(ctx);return err
 }
@@ -54,20 +54,20 @@ func(v *Valkey)GetChallenge(ctx context.Context,id string)(Challenge,error){
 }
 
 var verifyScript=redis.NewScript(`
-local values = redis.call('HMGET', KEYS[1], 'identity', 'code', 'return', 'attempts')
+local values = redis.call('HMGET', KEYS[1], 'site', 'identity', 'code', 'return', 'attempts')
 if not values[1] then return {'notfound'} end
-if values[2] == ARGV[1] then
+if values[3] == ARGV[1] then
   redis.call('DEL', KEYS[1])
-  return {'success', values[1], values[3]}
+  return {'success', values[1], values[2], values[4]}
 end
-local attempts = tonumber(values[4] or '0') + 1
+local attempts = tonumber(values[5] or '0') + 1
 local max = tonumber(ARGV[2])
 if attempts >= max then
   redis.call('DEL', KEYS[1])
-  return {'exhausted', values[1], values[3]}
+  return {'exhausted', values[1], values[2], values[4]}
 end
 redis.call('HSET', KEYS[1], 'attempts', attempts)
-return {'invalid', tostring(max-attempts), values[1], values[3]}
+return {'invalid', tostring(max-attempts), values[1], values[2], values[4]}
 `)
 
 func(v *Valkey)VerifyChallenge(ctx context.Context,id string,submitted []byte,max int)(VerifyResult,error){
@@ -77,14 +77,14 @@ func(v *Valkey)VerifyChallenge(ctx context.Context,id string,submitted []byte,ma
 	switch status{
 	case "notfound":return VerifyResult{Status:VerifyNotFound},nil
 	case "success","exhausted":
-		if len(items)<3{return VerifyResult{},errors.New("incomplete Valkey verification response")}
-		ch:=Challenge{IdentityID:fmt.Sprint(items[1]),ReturnURL:fmt.Sprint(items[2])}
+		if len(items)<5{return VerifyResult{},errors.New("incomplete Valkey verification response")}
+		ch:=Challenge{SiteID:fmt.Sprint(items[1]),IdentityID:fmt.Sprint(items[2]),ReturnURL:fmt.Sprint(items[3])}
 		if status=="success"{return VerifyResult{Status:VerifySuccess,Challenge:ch},nil}
 		return VerifyResult{Status:VerifyExhausted,Challenge:ch},nil
 	case "invalid":
 		if len(items)<4{return VerifyResult{},errors.New("incomplete Valkey verification response")}
 		remaining,err:=strconv.Atoi(fmt.Sprint(items[1]));if err!=nil{return VerifyResult{},err}
-		return VerifyResult{Status:VerifyInvalid,Remaining:remaining,Challenge:Challenge{IdentityID:fmt.Sprint(items[2]),ReturnURL:fmt.Sprint(items[3])}},nil
+		return VerifyResult{Status:VerifyInvalid,Remaining:remaining,Challenge:Challenge{SiteID:fmt.Sprint(items[2]),IdentityID:fmt.Sprint(items[3]),ReturnURL:fmt.Sprint(items[4])}},nil
 	default:return VerifyResult{},errors.New("unknown Valkey verification response")
 	}
 }
@@ -92,14 +92,14 @@ func(v *Valkey)VerifyChallenge(ctx context.Context,id string,submitted []byte,ma
 func(v *Valkey)CreateDevice(ctx context.Context,id string,d Device,ttl time.Duration)error{
 	key:=v.deviceKey(id)
 	pipe:=v.client.TxPipeline()
-	pipe.HSet(ctx,key,map[string]any{"identity":d.IdentityID,"last_seen":d.LastSeen.Unix()})
+	pipe.HSet(ctx,key,map[string]any{"site":d.SiteID,"identity":d.IdentityID,"last_seen":d.LastSeen.Unix()})
 	pipe.Expire(ctx,key,ttl)
 	_,err:=pipe.Exec(ctx);return err
 }
 func(v *Valkey)GetDevice(ctx context.Context,id string)(Device,error){
 	values,err:=v.client.HGetAll(ctx,v.deviceKey(id)).Result();if err!=nil{return Device{},err};if len(values)==0{return Device{},ErrNotFound}
 	last,err:=strconv.ParseInt(values["last_seen"],10,64);if err!=nil{return Device{},err}
-	return Device{IdentityID:values["identity"],LastSeen:time.Unix(last,0)},nil
+	return Device{SiteID:values["site"],IdentityID:values["identity"],LastSeen:time.Unix(last,0)},nil
 }
 var refreshDeviceScript=redis.NewScript(`
 if redis.call('EXISTS', KEYS[1]) == 0 then return 0 end
@@ -117,6 +117,6 @@ func(v *Valkey)Close()error{return v.client.Close()}
 func decodeChallenge(values map[string]string)(Challenge,error){
 	code,err:=base64.RawStdEncoding.DecodeString(values["code"]);if err!=nil{return Challenge{},err}
 	attempts,err:=strconv.Atoi(values["attempts"]);if err!=nil{return Challenge{},err}
-	return Challenge{IdentityID:values["identity"],CodeHash:code,ReturnURL:values["return"],Attempts:attempts},nil
+	return Challenge{SiteID:values["site"],IdentityID:values["identity"],CodeHash:code,ReturnURL:values["return"],Attempts:attempts},nil
 }
 
