@@ -3,6 +3,8 @@ services:
     build: .
     environment:
       GATEKEEPER_LISTEN: ":9080"
+      GATEKEEPER_API_LISTEN: ":9081"
+      GATEKEEPER_API_TOKEN: "development-management-token"
       GATEKEEPER_ALLOWED_EMAIL: "developer@example.test"
       GATEKEEPER_ALLOWED_DOMAIN: "example.test"
       GATEKEEPER_COOKIE_SECURE: "false"
@@ -14,6 +16,8 @@ services:
       GATEKEEPER_VALKEY_TLS: "false"
       GATEKEEPER_SMTP_ADDR: "mailpit:1025"
       GATEKEEPER_SMTP_FROM: "gatekeeper@example.test"
+    ports:
+      - "127.0.0.1:9081:9081"
     depends_on:
       valkey:
         condition: service_healthy
