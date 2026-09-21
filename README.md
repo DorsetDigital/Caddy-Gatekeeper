@@ -68,3 +68,29 @@ go test -race ./...
 ```
 
 The race-enabled test run is particularly important: a valid challenge submitted concurrently must succeed exactly once, and concurrent invalid submissions must not bypass the attempt ceiling.
+
+
+## Site management API
+
+Gatekeeper exposes a separate management listener, configured with `GATEKEEPER_API_LISTEN` (default `:9081`). Keep this listener on an internal interface/security group in production. API requests also require `Authorization: Bearer <GATEKEEPER_API_TOKEN>`.
+
+Site configuration is stored in Valkey. Silverstripe is intended to remain the durable source of truth and can republish all site configuration if the Gatekeeper configuration keys are ever lost.
+
+Create or replace a site:
+
+```bash
+curl -i -X PUT http://127.0.0.1:9081/api/v1/sites/demo \
+  -H 'Authorization: Bearer development-management-token' \
+  -H 'Content-Type: application/json' \
+  --data '{
+    "hosts": ["localhost"],
+    "access_rules": [
+      {"type": "email", "value": "developer@example.test"},
+      {"type": "domain", "value": "example.test"}
+    ]
+  }'
+```
+
+The API also supports `GET /api/v1/sites`, `GET /api/v1/sites/{id}` and `DELETE /api/v1/sites/{id}`.
+
+When a host has a deployed site configuration, Gatekeeper uses that site's access rules and binds new challenges/trusted devices to that site. A trusted device issued for one configured site is therefore not valid for another site.
