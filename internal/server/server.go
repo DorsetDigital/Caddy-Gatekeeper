@@ -82,7 +82,7 @@ func (s *Server) startChallenge(w http.ResponseWriter, r *http.Request) {
 	if s.config.Sites!=nil {
 		configured,err:=s.config.Sites.GetByHost(r.Context(),r.Host)
 		if err!=nil&&!errors.Is(err,site.ErrNotFound){http.Error(w,"Gatekeeper configuration unavailable",http.StatusServiceUnavailable);return}
-		if err==nil{matcher=access.NewMatcher(configured.AccessRules);siteID=configured.ID}
+		if errors.Is(err,site.ErrNotFound){matcher=access.NewMatcher(nil)}else{matcher=access.NewMatcher(configured.AccessRules);siteID=configured.ID}
 	}
 	authorised := matcher.Allowed(email)
 	id, code := randomToken(24), randomCode()
