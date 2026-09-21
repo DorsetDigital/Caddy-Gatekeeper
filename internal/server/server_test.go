@@ -13,6 +13,7 @@ import (
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/access"
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/identity"
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/store"
+	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/site"
 )
 
 type captureSender struct { messages chan maildelivery.Message }
@@ -66,4 +67,44 @@ func TestUnauthorizedIdentityDoesNotSendEmail(t *testing.T){
 	req:=httptest.NewRequest("POST","http://site.test/login",strings.NewReader(form.Encode()));req.Header.Set("Content-Type","application/x-www-form-urlencoded");res:=httptest.NewRecorder();s.startChallenge(res,req)
 	if res.Code!=302{t.Fatalf("status=%d, want 302",res.Code)}
 	select{case <-sender.messages:t.Fatal("email sent for unauthorized identity");case <-time.After(50*time.Millisecond):}
+}
+
+
+func managedTestServer(t *testing.T)(*Server,*store.Memory,*site.Memory){
+	t.Helper();st:=store.NewMemory();sites:=site.NewMemory()
+	if err:=sites.Put(context.Background(),site.Site{ID:"a",Hosts:[]string{"a.test"},AccessRules:[]access.Rule{{Type:access.RuleDomain,Value:"a.test"}}});err!=nil{t.Fatal(err)}
+	if err:=sites.Put(context.Background(),site.Site{ID:"b",Hosts:[]string{"b.test"},AccessRules:[]access.Rule{{Type:access.RuleDomain,Value:"b.test"}}});err!=nil{t.Fatal(err)}
+	return New(Config{Sites:sites,CookieName:"gatekeeper_device",DeviceLifetime:time.Hour,MaxAttempts:3,IdentityHasher:identity.NewHasher("test-key"),Store:st}),st,sites
+}
+
+func TestUnknownManagedHostDoesNotUseLegacyMatcher(t *testing.T){
+	st:=store.NewMemory();sites:=site.NewMemory();sender:=&captureSender{messages:make(chan maildelivery.Message,1)}
+	s:=New(Config{Sites:sites,AccessMatcher:access.NewMatcher([]access.Rule{{Type:access.RuleDomain,Value:"example.test"}}),CookieName:"gatekeeper_device",DeviceLifetime:time.Hour,MaxAttempts:3,IdentityHasher:identity.NewHasher("test-key"),Store:st,MailSender:sender})
+	form:=url.Values{"email":{"person@example.test"},"return":{"/protected"}}
+	req:=httptest.NewRequest("POST","http://unknown.test/login",strings.NewReader(form.Encode()));req.Header.Set("Content-Type","application/x-www-form-urlencoded");res:=httptest.NewRecorder();s.startChallenge(res,req)
+	if res.Code!=302{t.Fatalf("status=%d, want 302",res.Code)}
+	select{case <-sender.messages:t.Fatal("unmanaged host used fallback access matcher");case <-time.After(50*time.Millisecond):}
+}
+
+func TestTrustedDeviceIsBoundToConfiguredSite(t *testing.T){
+	s,st,_:=managedTestServer(t)
+	token:="trusted-token";_ = st.CreateDevice(context.Background(),hashString(token),store.Device{SiteID:"a",IdentityID:"identity",LastSeen:time.Now()},time.Hour)
+	if ok,err:=s.validDevice(context.Background(),token,"a.test");err!=nil||!ok{t.Fatalf("site A device rejected: ok=%v err=%v",ok,err)}
+	if ok,err:=s.validDevice(context.Background(),token,"b.test");err!=nil||ok{t.Fatalf("site A device accepted on site B: ok=%v err=%v",ok,err)}
+	if ok,err:=s.validDevice(context.Background(),token,"unknown.test");err!=nil||ok{t.Fatalf("site A device accepted on unknown host: ok=%v err=%v",ok,err)}
+}
+
+func TestSiteRuleUpdateTakesEffectImmediately(t *testing.T){
+	s,_,sites:=managedTestServer(t);sender:=&captureSender{messages:make(chan maildelivery.Message,2)};s.config.MailSender=sender
+	submit:=func(email string){form:=url.Values{"email":{email},"return":{"/protected"}};req:=httptest.NewRequest("POST","http://a.test/login",strings.NewReader(form.Encode()));req.Header.Set("Content-Type","application/x-www-form-urlencoded");res:=httptest.NewRecorder();s.startChallenge(res,req)}
+	submit("person@a.test");select{case <-sender.messages:case <-time.After(time.Second):t.Fatal("initial site rule did not authorize")}
+	if err:=sites.Put(context.Background(),site.Site{ID:"a",Hosts:[]string{"a.test"},AccessRules:[]access.Rule{{Type:access.RuleEmail,Value:"specific@a.test"}}});err!=nil{t.Fatal(err)}
+	submit("person@a.test");select{case <-sender.messages:t.Fatal("old site rule remained active after update");case <-time.After(50*time.Millisecond):}
+	submit("specific@a.test");select{case <-sender.messages:case <-time.After(time.Second):t.Fatal("updated site rule did not take effect")}
+}
+
+func TestDeletingSiteInvalidatesTrustedDevice(t *testing.T){
+	s,st,sites:=managedTestServer(t);token:="trusted-token";_ = st.CreateDevice(context.Background(),hashString(token),store.Device{SiteID:"a",IdentityID:"identity",LastSeen:time.Now()},time.Hour)
+	if err:=sites.Delete(context.Background(),"a");err!=nil{t.Fatal(err)}
+	if ok,err:=s.validDevice(context.Background(),token,"a.test");err!=nil||ok{t.Fatalf("device remained valid after site deletion: ok=%v err=%v",ok,err)}
 }
