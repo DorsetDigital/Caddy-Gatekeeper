@@ -65,10 +65,10 @@ func (d *AsyncDispatcher) worker() {
 		cancel()
 
 		if err != nil {
-			log.Printf("gatekeeper: OTP delivery failed: %v", err)
+			log.Printf("gatekeeper: OTP delivery failed site=%q host=%q: %v", message.SiteID, message.Host, err)
 			continue
 		}
 
-		log.Printf("gatekeeper: OTP delivery accepted by SMTP server")
+		log.Printf("gatekeeper: OTP delivery accepted by SMTP server site=%q host=%q", message.SiteID, message.Host)
 	}
 }
