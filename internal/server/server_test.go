@@ -22,6 +22,12 @@ import (
 type captureSender struct { messages chan maildelivery.Message }
 func (s *captureSender) Send(_ context.Context,m maildelivery.Message) error { s.messages<-m;return nil }
 
+type blockingLimiter struct{}
+func (blockingLimiter) Allow(ctx context.Context, _ string, _ int, _ time.Duration) (ratelimit.Result, error) {
+	<-ctx.Done()
+	return ratelimit.Result{}, ctx.Err()
+}
+
 func testServer() (*Server,*store.Memory) {
 	st:=store.NewMemory()
 	return New(Config{AccessMatcher:access.NewMatcher([]access.Rule{{Type:access.RuleEmail,Value:"developer@example.test"}}),CookieName:"gatekeeper_device",DeviceLifetime:30*24*time.Hour,MaxAttempts:3,IdentityHasher:identity.NewHasher("test-key"),Store:st}),st
@@ -197,4 +203,33 @@ func TestSiteRateLimitBlocksEleventhOTPRequest(t *testing.T){
 	s.startChallenge(res,req)
 	if res.Code!=429{t.Fatalf("eleventh status=%d, want 429",res.Code)}
 	if res.Header().Get("Retry-After")==""{t.Fatal("rate-limited response missing Retry-After")}
+}
+
+
+func TestStateTimeoutFailsClosed(t *testing.T){
+	st:=store.NewMemory()
+	sites:=site.NewMemory()
+	if err:=sites.Put(context.Background(),site.Site{ID:"a",Hosts:[]string{"a.test"},AccessRules:[]access.Rule{{Type:access.RuleDomain,Value:"a.test"}}});err!=nil{t.Fatal(err)}
+	s:=New(Config{
+		Sites:sites,
+		CookieName:"gatekeeper_device",
+		DeviceLifetime:time.Hour,
+		MaxAttempts:3,
+		IdentityHasher:identity.NewHasher("test-key"),
+		Store:st,
+		RateLimiter:blockingLimiter{},
+		StateTimeout:20*time.Millisecond,
+	})
+
+	form:=url.Values{"email":{"person@a.test"},"return":{"/protected"}}
+	req:=httptest.NewRequest("POST","http://a.test/login",strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type","application/x-www-form-urlencoded")
+	res:=httptest.NewRecorder()
+
+	started:=time.Now()
+	s.Handler().ServeHTTP(res,req)
+	elapsed:=time.Since(started)
+
+	if res.Code!=503{t.Fatalf("status=%d, want 503",res.Code)}
+	if elapsed>250*time.Millisecond{t.Fatalf("state timeout took %s, want under 250ms",elapsed)}
 }
