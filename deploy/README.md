@@ -26,6 +26,15 @@ Create a dedicated service account and configuration directory, then install:
 
 Edit `/etc/caddy-gatekeeper/gatekeeper.env` before starting the service.
 
+OTP issuance is rate-limited with configurable defaults:
+
+    GATEKEEPER_SITE_RATE_LIMIT=10
+    GATEKEEPER_SITE_RATE_WINDOW=10m
+    GATEKEEPER_IDENTITY_RATE_LIMIT=2
+    GATEKEEPER_IDENTITY_RATE_WINDOW=10m
+
+The site-wide limit is checked first, then the per-identity limit. Changing these values requires only a service restart, not a rebuild.
+
 ## Network layout
 
 The authentication listener should normally be loopback-only because Caddy on the same node is its only caller. The management API may be bound to the node's private VPC address when Silverstripe runs elsewhere. Restrict the management port with the instance security group and retain the bearer token as defence in depth.
