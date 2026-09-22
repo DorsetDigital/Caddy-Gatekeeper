@@ -49,6 +49,7 @@ func main() {
 		IdentityHasher: identity.NewHasher(requiredEnv("GATEKEEPER_IDENTITY_KEY")),
 		Store: state,
 		MailSender: buildMailSender(),
+		StateTimeout: envDuration("GATEKEEPER_STATE_TIMEOUT", time.Second),
 		RateLimiter: limiter,
 		SiteRateLimit: envInt("GATEKEEPER_SITE_RATE_LIMIT", 10),
 		SiteRateWindow: envDuration("GATEKEEPER_SITE_RATE_WINDOW", 10*time.Minute),
@@ -89,6 +90,10 @@ func buildStore(ctx context.Context)(store.Store,error){
 		Password:os.Getenv("GATEKEEPER_VALKEY_PASSWORD"),
 		TLS:env("GATEKEEPER_VALKEY_TLS","false")=="true",
 		Prefix:env("GATEKEEPER_VALKEY_PREFIX","gatekeeper:"),
+		DialTimeout:envDuration("GATEKEEPER_VALKEY_DIAL_TIMEOUT",750*time.Millisecond),
+		ReadTimeout:envDuration("GATEKEEPER_VALKEY_READ_TIMEOUT",750*time.Millisecond),
+		WriteTimeout:envDuration("GATEKEEPER_VALKEY_WRITE_TIMEOUT",750*time.Millisecond),
+		PoolTimeout:envDuration("GATEKEEPER_VALKEY_POOL_TIMEOUT",750*time.Millisecond),
 	})
 }
 func requiredEnv(name string) string { value:=os.Getenv(name);if value==""{log.Fatalf("%s is required",name)};return value }
