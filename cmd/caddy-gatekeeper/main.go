@@ -48,7 +48,7 @@ func main() {
 		MaxAttempts: envInt("GATEKEEPER_MAX_ATTEMPTS", 3),
 		IdentityHasher: identity.NewHasher(requiredEnv("GATEKEEPER_IDENTITY_KEY")),
 		Store: state,
-		MailSender: buildMailSender(),
+		MailDispatcher: buildMailDispatcher(),
 		StateTimeout: envDuration("GATEKEEPER_STATE_TIMEOUT", time.Second),
 		RateLimiter: limiter,
 		SiteRateLimit: envInt("GATEKEEPER_SITE_RATE_LIMIT", 10),
@@ -68,15 +68,21 @@ func main() {
 	log.Fatal(httpServer.ListenAndServe())
 }
 
-func buildMailSender() maildelivery.Sender {
+func buildMailDispatcher() maildelivery.Dispatcher {
 	addr:=strings.TrimSpace(os.Getenv("GATEKEEPER_SMTP_ADDR"))
 	if addr=="" { return nil }
-	return maildelivery.SMTP{
+	sender:=maildelivery.SMTP{
 		Addr:addr,
 		Username:os.Getenv("GATEKEEPER_SMTP_USERNAME"),
 		Password:os.Getenv("GATEKEEPER_SMTP_PASSWORD"),
 		From:env("GATEKEEPER_SMTP_FROM","gatekeeper@example.test"),
 	}
+	return maildelivery.NewAsyncDispatcher(
+		sender,
+		envInt("GATEKEEPER_SMTP_WORKERS",2),
+		envInt("GATEKEEPER_SMTP_QUEUE_SIZE",20),
+		envDuration("GATEKEEPER_SMTP_DELIVERY_TIMEOUT",10*time.Second),
+	)
 }
 
 func buildStore(ctx context.Context)(store.Store,error){
