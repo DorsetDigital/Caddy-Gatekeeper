@@ -34,7 +34,7 @@ type Config struct {
 	MaxAttempts int
 	IdentityHasher identity.Hasher
 	Store store.Store
-	MailSender maildelivery.Sender
+	MailDispatcher maildelivery.Dispatcher
 	StateTimeout time.Duration
 	RateLimiter ratelimit.Limiter
 	SiteRateLimit int
@@ -120,16 +120,18 @@ func (s *Server) startChallenge(w http.ResponseWriter, r *http.Request) {
 	if err := s.config.Store.CreateChallenge(r.Context(), id, ch, s.config.ChallengeLifetime); err != nil {
 		http.Error(w, "Gatekeeper state unavailable", http.StatusServiceUnavailable); return
 	}
-	if authorised && s.config.MailSender != nil {
+	if authorised && s.config.MailDispatcher != nil {
 		message:=maildelivery.OTPMessage(email,r.Host,code)
-		log.Printf("gatekeeper: OTP delivery queued")
-		go func() {
-			if err := s.config.MailSender.Send(context.Background(), message); err != nil {
-				log.Printf("gatekeeper: OTP delivery failed: %v", err)
-				return
+		message.SiteID=siteID
+		if err:=s.config.MailDispatcher.Enqueue(message);err!=nil {
+			if errors.Is(err,maildelivery.ErrQueueFull) {
+				log.Printf("gatekeeper: OTP delivery queue full site=%q host=%q",siteID,r.Host)
+			} else {
+				log.Printf("gatekeeper: OTP delivery enqueue failed site=%q host=%q: %v",siteID,r.Host,err)
 			}
-			log.Printf("gatekeeper: OTP delivery accepted by SMTP server")
-		}()
+		} else {
+			log.Printf("gatekeeper: OTP delivery queued site=%q host=%q",siteID,r.Host)
+		}
 	}
 	http.Redirect(w, r, "/.gatekeeper/verify?id="+url.QueryEscape(id), http.StatusFound)
 }
