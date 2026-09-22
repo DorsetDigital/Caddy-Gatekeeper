@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log"
 	"html/template"
 	"math/big"
 	"net/http"
@@ -95,7 +96,11 @@ func (s *Server) startChallenge(w http.ResponseWriter, r *http.Request) {
 	}
 	if authorised && s.config.MailSender != nil {
 		message:=maildelivery.OTPMessage(email,r.Host,code)
-		go func(){ _ = s.config.MailSender.Send(context.Background(),message) }()
+		go func() {
+			if err := s.config.MailSender.Send(context.Background(), message); err != nil {
+				log.Printf("gatekeeper: OTP delivery failed: %v", err)
+			}
+		}()
 	}
 	http.Redirect(w, r, "/.gatekeeper/verify?id="+url.QueryEscape(id), http.StatusFound)
 }
