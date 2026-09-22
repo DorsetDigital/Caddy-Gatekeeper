@@ -19,8 +19,9 @@ import (
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/store"
 )
 
-type captureSender struct { messages chan maildelivery.Message }
-func (s *captureSender) Send(_ context.Context,m maildelivery.Message) error { s.messages<-m;return nil }
+type captureDispatcher struct { messages chan maildelivery.Message }
+func (s *captureDispatcher) Enqueue(m maildelivery.Message) error { s.messages<-m;return nil }
+func (s *captureDispatcher) Close() {}
 
 type blockingLimiter struct{}
 func (blockingLimiter) Allow(ctx context.Context, _ string, _ int, _ time.Duration) (ratelimit.Result, error) {
@@ -61,8 +62,8 @@ func TestSuccessfulChallengeIsConsumedAndDeviceTokenIsHashed(t *testing.T){
 }
 
 func TestAuthorizedIdentityQueuesOTPEmail(t *testing.T){
-	st:=store.NewMemory();sender:=&captureSender{messages:make(chan maildelivery.Message,1)}
-	s:=New(Config{AccessMatcher:access.NewMatcher([]access.Rule{{Type:access.RuleDomain,Value:"example.test"}}),CookieName:"gatekeeper_device",DeviceLifetime:time.Hour,MaxAttempts:3,IdentityHasher:identity.NewHasher("test-key"),Store:st,MailSender:sender})
+	st:=store.NewMemory();sender:=&captureDispatcher{messages:make(chan maildelivery.Message,1)}
+	s:=New(Config{AccessMatcher:access.NewMatcher([]access.Rule{{Type:access.RuleDomain,Value:"example.test"}}),CookieName:"gatekeeper_device",DeviceLifetime:time.Hour,MaxAttempts:3,IdentityHasher:identity.NewHasher("test-key"),Store:st,MailDispatcher:sender})
 	form:=url.Values{"email":{"person@example.test"},"return":{"/protected"}}
 	req:=httptest.NewRequest("POST","http://site.test/login",strings.NewReader(form.Encode()));req.Header.Set("Content-Type","application/x-www-form-urlencoded");res:=httptest.NewRecorder();s.startChallenge(res,req)
 	if res.Code!=302{t.Fatalf("status=%d, want 302",res.Code)}
@@ -70,8 +71,8 @@ func TestAuthorizedIdentityQueuesOTPEmail(t *testing.T){
 }
 
 func TestUnauthorizedIdentityDoesNotSendEmail(t *testing.T){
-	st:=store.NewMemory();sender:=&captureSender{messages:make(chan maildelivery.Message,1)}
-	s:=New(Config{AccessMatcher:access.NewMatcher([]access.Rule{{Type:access.RuleDomain,Value:"example.test"}}),CookieName:"gatekeeper_device",DeviceLifetime:time.Hour,MaxAttempts:3,IdentityHasher:identity.NewHasher("test-key"),Store:st,MailSender:sender})
+	st:=store.NewMemory();sender:=&captureDispatcher{messages:make(chan maildelivery.Message,1)}
+	s:=New(Config{AccessMatcher:access.NewMatcher([]access.Rule{{Type:access.RuleDomain,Value:"example.test"}}),CookieName:"gatekeeper_device",DeviceLifetime:time.Hour,MaxAttempts:3,IdentityHasher:identity.NewHasher("test-key"),Store:st,MailDispatcher:sender})
 	form:=url.Values{"email":{"person@other.test"},"return":{"/protected"}}
 	req:=httptest.NewRequest("POST","http://site.test/login",strings.NewReader(form.Encode()));req.Header.Set("Content-Type","application/x-www-form-urlencoded");res:=httptest.NewRecorder();s.startChallenge(res,req)
 	if res.Code!=302{t.Fatalf("status=%d, want 302",res.Code)}
@@ -87,8 +88,8 @@ func managedTestServer(t *testing.T)(*Server,*store.Memory,*site.Memory){
 }
 
 func TestUnknownManagedHostDoesNotUseLegacyMatcher(t *testing.T){
-	st:=store.NewMemory();sites:=site.NewMemory();sender:=&captureSender{messages:make(chan maildelivery.Message,1)}
-	s:=New(Config{Sites:sites,AccessMatcher:access.NewMatcher([]access.Rule{{Type:access.RuleDomain,Value:"example.test"}}),CookieName:"gatekeeper_device",DeviceLifetime:time.Hour,MaxAttempts:3,IdentityHasher:identity.NewHasher("test-key"),Store:st,MailSender:sender})
+	st:=store.NewMemory();sites:=site.NewMemory();sender:=&captureDispatcher{messages:make(chan maildelivery.Message,1)}
+	s:=New(Config{Sites:sites,AccessMatcher:access.NewMatcher([]access.Rule{{Type:access.RuleDomain,Value:"example.test"}}),CookieName:"gatekeeper_device",DeviceLifetime:time.Hour,MaxAttempts:3,IdentityHasher:identity.NewHasher("test-key"),Store:st,MailDispatcher:sender})
 	form:=url.Values{"email":{"person@example.test"},"return":{"/protected"}}
 	req:=httptest.NewRequest("POST","http://unknown.test/login",strings.NewReader(form.Encode()));req.Header.Set("Content-Type","application/x-www-form-urlencoded");res:=httptest.NewRecorder();s.startChallenge(res,req)
 	if res.Code!=302{t.Fatalf("status=%d, want 302",res.Code)}
@@ -104,7 +105,7 @@ func TestTrustedDeviceIsBoundToConfiguredSite(t *testing.T){
 }
 
 func TestSiteRuleUpdateTakesEffectImmediately(t *testing.T){
-	s,_,sites:=managedTestServer(t);sender:=&captureSender{messages:make(chan maildelivery.Message,2)};s.config.MailSender=sender
+	s,_,sites:=managedTestServer(t);sender:=&captureDispatcher{messages:make(chan maildelivery.Message,2)};s.config.MailDispatcher=sender
 	submit:=func(email string){form:=url.Values{"email":{email},"return":{"/protected"}};req:=httptest.NewRequest("POST","http://a.test/login",strings.NewReader(form.Encode()));req.Header.Set("Content-Type","application/x-www-form-urlencoded");res:=httptest.NewRecorder();s.startChallenge(res,req)}
 	submit("person@a.test");select{case <-sender.messages:case <-time.After(time.Second):t.Fatal("initial site rule did not authorize")}
 	if err:=sites.Put(context.Background(),site.Site{ID:"a",Hosts:[]string{"a.test"},AccessRules:[]access.Rule{{Type:access.RuleEmail,Value:"specific@a.test"}}});err!=nil{t.Fatal(err)}
