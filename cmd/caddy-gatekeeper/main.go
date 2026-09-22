@@ -11,6 +11,7 @@ import (
 
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/identity"
 	maildelivery "github.com/DorsetDigital/Caddy-Gatekeeper/internal/mail"
+	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/ratelimit"
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/server"
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/management"
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/site"
@@ -23,7 +24,14 @@ func main() {
 	if err != nil { log.Fatalf("initialise state store: %v", err) }
 	defer state.Close()
 	var sites site.Repository
-	if valkeyStore,ok:=state.(*store.Valkey);ok{sites=site.NewValkey(valkeyStore.Client(),valkeyStore.Prefix())}else{sites=site.NewMemory()}
+	var limiter ratelimit.Limiter
+	if valkeyStore,ok:=state.(*store.Valkey);ok{
+		sites=site.NewValkey(valkeyStore.Client(),valkeyStore.Prefix())
+		limiter=ratelimit.NewValkey(valkeyStore.Client(),valkeyStore.Prefix())
+	}else{
+		sites=site.NewMemory()
+		limiter=ratelimit.NewMemory()
+	}
 	apiAddr:=env("GATEKEEPER_API_LISTEN",":9081")
 	api:=management.New(sites,requiredEnv("GATEKEEPER_API_TOKEN"))
 	go func(){
@@ -41,6 +49,11 @@ func main() {
 		IdentityHasher: identity.NewHasher(requiredEnv("GATEKEEPER_IDENTITY_KEY")),
 		Store: state,
 		MailSender: buildMailSender(),
+		RateLimiter: limiter,
+		SiteRateLimit: envInt("GATEKEEPER_SITE_RATE_LIMIT", 10),
+		SiteRateWindow: envDuration("GATEKEEPER_SITE_RATE_WINDOW", 10*time.Minute),
+		IdentityRateLimit: envInt("GATEKEEPER_IDENTITY_RATE_LIMIT", 2),
+		IdentityRateWindow: envDuration("GATEKEEPER_IDENTITY_RATE_WINDOW", 10*time.Minute),
 	})
 	log.Printf("caddy-gatekeeper listening on %s", addr)
 	httpServer:=&http.Server{
@@ -80,4 +93,5 @@ func buildStore(ctx context.Context)(store.Store,error){
 }
 func requiredEnv(name string) string { value:=os.Getenv(name);if value==""{log.Fatalf("%s is required",name)};return value }
 func envInt(name string,fallback int)int{value:=os.Getenv(name);if value==""{return fallback};parsed,err:=strconv.Atoi(value);if err!=nil||parsed<1{log.Fatalf("%s must be a positive integer",name)};return parsed}
+func envDuration(name string,fallback time.Duration)time.Duration{value:=os.Getenv(name);if value==""{return fallback};parsed,err:=time.ParseDuration(value);if err!=nil||parsed<=0{log.Fatalf("%s must be a positive duration",name)};return parsed}
 func env(name,fallback string)string{if value:=os.Getenv(name);value!=""{return value};return fallback}
