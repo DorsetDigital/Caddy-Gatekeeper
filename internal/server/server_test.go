@@ -13,8 +13,9 @@ import (
 
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/access"
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/identity"
-	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/store"
+	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/ratelimit"
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/site"
+	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/store"
 )
 
 type captureSender struct { messages chan maildelivery.Message }
@@ -127,4 +128,72 @@ func TestTrustedDeviceRefreshReissuesBrowserCookie(t *testing.T){
 	if len(cookies)!=1{t.Fatalf("Set-Cookie count=%d, want 1",len(cookies))}
 	if cookies[0].Value!=token{t.Fatal("trusted-device token changed during sliding refresh")}
 	if cookies[0].MaxAge!=int(s.config.DeviceLifetime.Seconds()){t.Fatalf("MaxAge=%d",cookies[0].MaxAge)}
+}
+
+
+func TestIdentityRateLimitBlocksThirdOTPRequest(t *testing.T){
+	st:=store.NewMemory()
+	sites:=site.NewMemory()
+	if err:=sites.Put(context.Background(),site.Site{ID:"a",Hosts:[]string{"a.test"},AccessRules:[]access.Rule{{Type:access.RuleDomain,Value:"a.test"}}});err!=nil{t.Fatal(err)}
+	s:=New(Config{
+		Sites:sites,
+		CookieName:"gatekeeper_device",
+		DeviceLifetime:time.Hour,
+		MaxAttempts:3,
+		IdentityHasher:identity.NewHasher("test-key"),
+		Store:st,
+		RateLimiter:ratelimit.NewMemory(),
+		SiteRateLimit:10,
+		SiteRateWindow:10*time.Minute,
+		IdentityRateLimit:2,
+		IdentityRateWindow:10*time.Minute,
+	})
+
+	submit:=func()int{
+		form:=url.Values{"email":{"person@a.test"},"return":{"/protected"}}
+		req:=httptest.NewRequest("POST","http://a.test/login",strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type","application/x-www-form-urlencoded")
+		res:=httptest.NewRecorder()
+		s.startChallenge(res,req)
+		return res.Code
+	}
+	if got:=submit();got!=302{t.Fatalf("first status=%d, want 302",got)}
+	if got:=submit();got!=302{t.Fatalf("second status=%d, want 302",got)}
+	if got:=submit();got!=429{t.Fatalf("third status=%d, want 429",got)}
+}
+
+func TestSiteRateLimitBlocksEleventhOTPRequest(t *testing.T){
+	st:=store.NewMemory()
+	sites:=site.NewMemory()
+	if err:=sites.Put(context.Background(),site.Site{ID:"a",Hosts:[]string{"a.test"},AccessRules:[]access.Rule{{Type:access.RuleDomain,Value:"a.test"}}});err!=nil{t.Fatal(err)}
+	s:=New(Config{
+		Sites:sites,
+		CookieName:"gatekeeper_device",
+		DeviceLifetime:time.Hour,
+		MaxAttempts:3,
+		IdentityHasher:identity.NewHasher("test-key"),
+		Store:st,
+		RateLimiter:ratelimit.NewMemory(),
+		SiteRateLimit:10,
+		SiteRateWindow:10*time.Minute,
+		IdentityRateLimit:2,
+		IdentityRateWindow:10*time.Minute,
+	})
+
+	for i:=0;i<10;i++{
+		form:=url.Values{"email":{fmt.Sprintf("person%d@a.test",i)},"return":{"/protected"}}
+		req:=httptest.NewRequest("POST","http://a.test/login",strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type","application/x-www-form-urlencoded")
+		res:=httptest.NewRecorder()
+		s.startChallenge(res,req)
+		if res.Code!=302{t.Fatalf("request %d status=%d, want 302",i+1,res.Code)}
+	}
+
+	form:=url.Values{"email":{"person10@a.test"},"return":{"/protected"}}
+	req:=httptest.NewRequest("POST","http://a.test/login",strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type","application/x-www-form-urlencoded")
+	res:=httptest.NewRecorder()
+	s.startChallenge(res,req)
+	if res.Code!=429{t.Fatalf("eleventh status=%d, want 429",res.Code)}
+	if res.Header().Get("Retry-After")==""{t.Fatal("rate-limited response missing Retry-After")}
 }
