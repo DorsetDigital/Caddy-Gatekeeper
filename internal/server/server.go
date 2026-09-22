@@ -35,6 +35,7 @@ type Config struct {
 	IdentityHasher identity.Hasher
 	Store store.Store
 	MailSender maildelivery.Sender
+	StateTimeout time.Duration
 	RateLimiter ratelimit.Limiter
 	SiteRateLimit int
 	SiteRateWindow time.Duration
@@ -49,6 +50,7 @@ func New(config Config) *Server {
 	if config.ChallengeLifetime == 0 { config.ChallengeLifetime = 10 * time.Minute }
 	if config.DeviceRefreshInterval == 0 { config.DeviceRefreshInterval = 24 * time.Hour }
 	if config.MaxAttempts == 0 { config.MaxAttempts = 3 }
+	if config.StateTimeout == 0 { config.StateTimeout = time.Second }
 	if config.SiteRateLimit == 0 { config.SiteRateLimit = 10 }
 	if config.SiteRateWindow == 0 { config.SiteRateWindow = 10 * time.Minute }
 	if config.IdentityRateLimit == 0 { config.IdentityRateLimit = 2 }
@@ -65,7 +67,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /verify", s.verify)
 	mux.HandleFunc("POST /verify", s.completeChallenge)
 	mux.HandleFunc("POST /logout", s.logout)
-	return securityHeaders(mux)
+	return securityHeaders(s.withStateTimeout(mux))
+}
+
+func (s *Server) withStateTimeout(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), s.config.StateTimeout)
+		defer cancel()
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }
