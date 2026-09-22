@@ -14,6 +14,8 @@ type Message struct {
 	To string
 	Subject string
 	Text string
+	SiteID string
+	Host string
 }
 
 type Sender interface {
@@ -112,5 +114,5 @@ var ErrQueueFull = errors.New("SMTP delivery queue full")
 func OTPMessage(to,host,code string) Message {
 	subject:="Website access code"
 	if host!="" { subject=fmt.Sprintf("Website access code for %s",host) }
-	return Message{To:to,Subject:subject,Text:fmt.Sprintf("Your access code is: %s\n\nThis code expires shortly. If you did not request it, you can ignore this email.",code)}
+	return Message{To:to,Subject:subject,Text:fmt.Sprintf("Your access code is: %s\n\nThis code expires shortly. If you did not request it, you can ignore this email.",code),Host:host}
 }
