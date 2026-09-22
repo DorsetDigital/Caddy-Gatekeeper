@@ -40,6 +40,9 @@ func main() {
 		if err:=apiServer.ListenAndServe();err!=nil&&err!=http.ErrServerClosed{log.Fatalf("management API: %v",err)}
 	}()
 
+	dispatcher:=buildMailDispatcher()
+	if dispatcher!=nil { defer dispatcher.Close() }
+
 	app := server.New(server.Config{
 		Sites: sites,
 		CookieName: "gatekeeper_device",
@@ -48,7 +51,7 @@ func main() {
 		MaxAttempts: envInt("GATEKEEPER_MAX_ATTEMPTS", 3),
 		IdentityHasher: identity.NewHasher(requiredEnv("GATEKEEPER_IDENTITY_KEY")),
 		Store: state,
-		MailDispatcher: buildMailDispatcher(),
+		MailDispatcher: dispatcher,
 		StateTimeout: envDuration("GATEKEEPER_STATE_TIMEOUT", time.Second),
 		RateLimiter: limiter,
 		SiteRateLimit: envInt("GATEKEEPER_SITE_RATE_LIMIT", 10),
