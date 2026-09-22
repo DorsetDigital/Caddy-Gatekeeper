@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
@@ -89,9 +90,9 @@ func TestUnknownManagedHostDoesNotUseLegacyMatcher(t *testing.T){
 func TestTrustedDeviceIsBoundToConfiguredSite(t *testing.T){
 	s,st,_:=managedTestServer(t)
 	token:="trusted-token";_ = st.CreateDevice(context.Background(),hashString(token),store.Device{SiteID:"a",IdentityID:"identity",LastSeen:time.Now()},time.Hour)
-	if ok,err:=s.validDevice(context.Background(),token,"a.test");err!=nil||!ok{t.Fatalf("site A device rejected: ok=%v err=%v",ok,err)}
-	if ok,err:=s.validDevice(context.Background(),token,"b.test");err!=nil||ok{t.Fatalf("site A device accepted on site B: ok=%v err=%v",ok,err)}
-	if ok,err:=s.validDevice(context.Background(),token,"unknown.test");err!=nil||ok{t.Fatalf("site A device accepted on unknown host: ok=%v err=%v",ok,err)}
+	if ok,_,err:=s.validDevice(context.Background(),token,"a.test");err!=nil||!ok{t.Fatalf("site A device rejected: ok=%v err=%v",ok,err)}
+	if ok,_,err:=s.validDevice(context.Background(),token,"b.test");err!=nil||ok{t.Fatalf("site A device accepted on site B: ok=%v err=%v",ok,err)}
+	if ok,_,err:=s.validDevice(context.Background(),token,"unknown.test");err!=nil||ok{t.Fatalf("site A device accepted on unknown host: ok=%v err=%v",ok,err)}
 }
 
 func TestSiteRuleUpdateTakesEffectImmediately(t *testing.T){
@@ -106,5 +107,24 @@ func TestSiteRuleUpdateTakesEffectImmediately(t *testing.T){
 func TestDeletingSiteInvalidatesTrustedDevice(t *testing.T){
 	s,st,sites:=managedTestServer(t);token:="trusted-token";_ = st.CreateDevice(context.Background(),hashString(token),store.Device{SiteID:"a",IdentityID:"identity",LastSeen:time.Now()},time.Hour)
 	if err:=sites.Delete(context.Background(),"a");err!=nil{t.Fatal(err)}
-	if ok,err:=s.validDevice(context.Background(),token,"a.test");err!=nil||ok{t.Fatalf("device remained valid after site deletion: ok=%v err=%v",ok,err)}
+	if ok,_,err:=s.validDevice(context.Background(),token,"a.test");err!=nil||ok{t.Fatalf("device remained valid after site deletion: ok=%v err=%v",ok,err)}
+}
+
+func TestTrustedDeviceRefreshReissuesBrowserCookie(t *testing.T){
+	s,st,_:=managedTestServer(t)
+	s.config.DeviceRefreshInterval=time.Hour
+	s.config.DeviceLifetime=30*24*time.Hour
+	token:="trusted-token"
+	_ = st.CreateDevice(context.Background(),hashString(token),store.Device{SiteID:"a",IdentityID:"identity",LastSeen:time.Now().Add(-2*time.Hour)},s.config.DeviceLifetime)
+
+	req:=httptest.NewRequest("GET","http://a.test/auth/check",nil)
+	req.AddCookie(&http.Cookie{Name:s.config.CookieName,Value:token})
+	res:=httptest.NewRecorder()
+	s.check(res,req)
+
+	if res.Code!=204{t.Fatalf("status=%d, want 204",res.Code)}
+	cookies:=res.Result().Cookies()
+	if len(cookies)!=1{t.Fatalf("Set-Cookie count=%d, want 1",len(cookies))}
+	if cookies[0].Value!=token{t.Fatal("trusted-device token changed during sliding refresh")}
+	if cookies[0].MaxAge!=int(s.config.DeviceLifetime.Seconds()){t.Fatalf("MaxAge=%d",cookies[0].MaxAge)}
 }
