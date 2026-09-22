@@ -23,6 +23,10 @@ type captureDispatcher struct { messages chan maildelivery.Message }
 func (s *captureDispatcher) Enqueue(m maildelivery.Message) error { s.messages<-m;return nil }
 func (s *captureDispatcher) Close() {}
 
+type fullDispatcher struct{}
+func (fullDispatcher) Enqueue(maildelivery.Message) error { return maildelivery.ErrQueueFull }
+func (fullDispatcher) Close() {}
+
 type blockingLimiter struct{}
 func (blockingLimiter) Allow(ctx context.Context, _ string, _ int, _ time.Duration) (ratelimit.Result, error) {
 	<-ctx.Done()
@@ -79,6 +83,30 @@ func TestUnauthorizedIdentityDoesNotSendEmail(t *testing.T){
 	select{case <-sender.messages:t.Fatal("email sent for unauthorized identity");case <-time.After(50*time.Millisecond):}
 }
 
+
+
+func TestFullMailQueuePreservesChallengeFlow(t *testing.T){
+	st:=store.NewMemory()
+	s:=New(Config{
+		AccessMatcher:access.NewMatcher([]access.Rule{{Type:access.RuleDomain,Value:"example.test"}}),
+		CookieName:"gatekeeper_device",
+		DeviceLifetime:time.Hour,
+		MaxAttempts:3,
+		IdentityHasher:identity.NewHasher("test-key"),
+		Store:st,
+		MailDispatcher:fullDispatcher{},
+	})
+	form:=url.Values{"email":{"person@example.test"},"return":{"/protected"}}
+	req:=httptest.NewRequest("POST","http://site.test/login",strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type","application/x-www-form-urlencoded")
+	res:=httptest.NewRecorder()
+	s.startChallenge(res,req)
+
+	if res.Code!=302{t.Fatalf("status=%d, want 302",res.Code)}
+	if !strings.HasPrefix(res.Header().Get("Location"),"/.gatekeeper/verify?id="){
+		t.Fatalf("location=%q, want verify challenge",res.Header().Get("Location"))
+	}
+}
 
 func managedTestServer(t *testing.T)(*Server,*store.Memory,*site.Memory){
 	t.Helper();st:=store.NewMemory();sites:=site.NewMemory()
