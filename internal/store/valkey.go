@@ -20,6 +20,10 @@ type ValkeyConfig struct {
 	Password string
 	TLS bool
 	Prefix string
+	DialTimeout time.Duration
+	ReadTimeout time.Duration
+	WriteTimeout time.Duration
+	PoolTimeout time.Duration
 }
 
 type Valkey struct {
@@ -33,9 +37,29 @@ func NewValkey(ctx context.Context,cfg ValkeyConfig)(*Valkey,error){
 	if cfg.TLS { tlsConfig=&tls.Config{MinVersion:tls.VersionTLS12} }
 	var client redis.UniversalClient
 	if strings.EqualFold(cfg.Mode,"cluster"){
-		client=redis.NewClusterClient(&redis.ClusterOptions{Addrs:cfg.Addrs,Username:cfg.Username,Password:cfg.Password,TLSConfig:tlsConfig})
+		client=redis.NewClusterClient(&redis.ClusterOptions{
+			Addrs:cfg.Addrs,
+			Username:cfg.Username,
+			Password:cfg.Password,
+			TLSConfig:tlsConfig,
+			DialTimeout:cfg.DialTimeout,
+			ReadTimeout:cfg.ReadTimeout,
+			WriteTimeout:cfg.WriteTimeout,
+			PoolTimeout:cfg.PoolTimeout,
+			ContextTimeoutEnabled:true,
+		})
 	}else{
-		client=redis.NewClient(&redis.Options{Addr:cfg.Addrs[0],Username:cfg.Username,Password:cfg.Password,TLSConfig:tlsConfig})
+		client=redis.NewClient(&redis.Options{
+			Addr:cfg.Addrs[0],
+			Username:cfg.Username,
+			Password:cfg.Password,
+			TLSConfig:tlsConfig,
+			DialTimeout:cfg.DialTimeout,
+			ReadTimeout:cfg.ReadTimeout,
+			WriteTimeout:cfg.WriteTimeout,
+			PoolTimeout:cfg.PoolTimeout,
+			ContextTimeoutEnabled:true,
+		})
 	}
 	if err:=client.Ping(ctx).Err();err!=nil{_ = client.Close();return nil,fmt.Errorf("connect to Valkey: %w",err)}
 	prefix:=cfg.Prefix;if prefix==""{prefix="gatekeeper:"}
