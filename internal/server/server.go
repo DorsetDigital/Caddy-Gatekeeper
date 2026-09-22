@@ -18,8 +18,9 @@ import (
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/access"
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/identity"
 	maildelivery "github.com/DorsetDigital/Caddy-Gatekeeper/internal/mail"
-	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/store"
+	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/ratelimit"
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/site"
+	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/store"
 )
 
 type Config struct {
@@ -34,6 +35,11 @@ type Config struct {
 	IdentityHasher identity.Hasher
 	Store store.Store
 	MailSender maildelivery.Sender
+	RateLimiter ratelimit.Limiter
+	SiteRateLimit int
+	SiteRateWindow time.Duration
+	IdentityRateLimit int
+	IdentityRateWindow time.Duration
 }
 
 type Server struct { config Config }
@@ -43,6 +49,10 @@ func New(config Config) *Server {
 	if config.ChallengeLifetime == 0 { config.ChallengeLifetime = 10 * time.Minute }
 	if config.DeviceRefreshInterval == 0 { config.DeviceRefreshInterval = 24 * time.Hour }
 	if config.MaxAttempts == 0 { config.MaxAttempts = 3 }
+	if config.SiteRateLimit == 0 { config.SiteRateLimit = 10 }
+	if config.SiteRateWindow == 0 { config.SiteRateWindow = 10 * time.Minute }
+	if config.IdentityRateLimit == 0 { config.IdentityRateLimit = 2 }
+	if config.IdentityRateWindow == 0 { config.IdentityRateWindow = 10 * time.Minute }
 	return &Server{config: config}
 }
 
@@ -85,12 +95,14 @@ func (s *Server) startChallenge(w http.ResponseWriter, r *http.Request) {
 		if err!=nil&&!errors.Is(err,site.ErrNotFound){http.Error(w,"Gatekeeper configuration unavailable",http.StatusServiceUnavailable);return}
 		if errors.Is(err,site.ErrNotFound){matcher=access.NewMatcher(nil)}else{matcher=access.NewMatcher(configured.AccessRules);siteID=configured.ID}
 	}
+	identityID := s.config.IdentityHasher.ID(email)
+	if !s.allowOTPRequest(w,r,siteID,identityID) { return }
 	authorised := matcher.Allowed(email)
 	id, code := randomToken(24), randomCode()
 	codeHash := hashValue(randomToken(32))
 	if authorised { codeHash = hashValue(code) }
 
-	ch := store.Challenge{SiteID: siteID, IdentityID: s.config.IdentityHasher.ID(email), CodeHash: codeHash[:], ReturnURL: returnURL}
+	ch := store.Challenge{SiteID: siteID, IdentityID: identityID, CodeHash: codeHash[:], ReturnURL: returnURL}
 	if err := s.config.Store.CreateChallenge(r.Context(), id, ch, s.config.ChallengeLifetime); err != nil {
 		http.Error(w, "Gatekeeper state unavailable", http.StatusServiceUnavailable); return
 	}
@@ -106,6 +118,56 @@ func (s *Server) startChallenge(w http.ResponseWriter, r *http.Request) {
 		}()
 	}
 	http.Redirect(w, r, "/.gatekeeper/verify?id="+url.QueryEscape(id), http.StatusFound)
+}
+
+
+func (s *Server) allowOTPRequest(w http.ResponseWriter, r *http.Request, siteID, identityID string) bool {
+	if s.config.RateLimiter == nil || siteID == "" {
+		return true
+	}
+
+	checks := []struct {
+		key    string
+		limit  int
+		window time.Duration
+		kind   string
+	}{
+		{key: "site:" + siteID, limit: s.config.SiteRateLimit, window: s.config.SiteRateWindow, kind: "site"},
+		{key: "identity:" + siteID + ":" + identityID, limit: s.config.IdentityRateLimit, window: s.config.IdentityRateWindow, kind: "identity"},
+	}
+
+	for _, check := range checks {
+		result, err := s.config.RateLimiter.Allow(r.Context(), check.key, check.limit, check.window)
+		if err != nil {
+			http.Error(w, "Gatekeeper state unavailable", http.StatusServiceUnavailable)
+			return false
+		}
+		if result.Allowed {
+			continue
+		}
+
+		if result.FirstBlocked {
+			if check.kind == "site" {
+				log.Printf("gatekeeper: OTP site rate limit reached site=%q host=%q window=%s", siteID, r.Host, check.window)
+			} else {
+				shortID := identityID
+				if len(shortID) > 8 {
+					shortID = shortID[:8]
+				}
+				log.Printf("gatekeeper: OTP identity rate limit reached site=%q host=%q identity=%q window=%s", siteID, r.Host, shortID, check.window)
+			}
+		}
+
+		retrySeconds := int((result.RetryAfter + time.Second - 1) / time.Second)
+		if retrySeconds < 1 {
+			retrySeconds = 1
+		}
+		w.Header().Set("Retry-After", fmt.Sprintf("%d", retrySeconds))
+		http.Error(w, "Too many access-code requests. Please try again shortly.", http.StatusTooManyRequests)
+		return false
+	}
+
+	return true
 }
 
 func (s *Server) verify(w http.ResponseWriter, r *http.Request) {
