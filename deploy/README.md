@@ -65,3 +65,14 @@ Proxy the reserved Gatekeeper UI path and use `forward_auth` only for the paths 
     }
 
 The site's normal handlers/reverse proxy continue after Gatekeeper authorises the request.
+
+
+## SMTP delivery bounds
+
+OTP delivery uses a bounded worker pool so a slow or unavailable SMTP provider cannot create an unbounded number of goroutines:
+
+    GATEKEEPER_SMTP_WORKERS=2
+    GATEKEEPER_SMTP_QUEUE_SIZE=20
+    GATEKEEPER_SMTP_DELIVERY_TIMEOUT=10s
+
+These values are read at startup and can be changed without rebuilding Gatekeeper. When the queue is full, Gatekeeper preserves the same browser flow and logs the delivery-capacity failure without exposing the recipient address.
