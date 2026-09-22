@@ -96,10 +96,13 @@ func (s *Server) startChallenge(w http.ResponseWriter, r *http.Request) {
 	}
 	if authorised && s.config.MailSender != nil {
 		message:=maildelivery.OTPMessage(email,r.Host,code)
+		log.Printf("gatekeeper: OTP delivery queued")
 		go func() {
 			if err := s.config.MailSender.Send(context.Background(), message); err != nil {
 				log.Printf("gatekeeper: OTP delivery failed: %v", err)
+				return
 			}
+			log.Printf("gatekeeper: OTP delivery accepted by SMTP server")
 		}()
 	}
 	http.Redirect(w, r, "/.gatekeeper/verify?id="+url.QueryEscape(id), http.StatusFound)
