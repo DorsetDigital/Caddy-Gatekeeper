@@ -35,6 +35,16 @@ OTP issuance is rate-limited with configurable defaults:
 
 The site-wide limit is checked first, then the per-identity limit. Changing these values requires only a service restart, not a rebuild.
 
+State-store operations are deliberately bounded so a Valkey/MemoryDB outage fails closed quickly instead of tying up Caddy requests:
+
+    GATEKEEPER_STATE_TIMEOUT=1s
+    GATEKEEPER_VALKEY_DIAL_TIMEOUT=750ms
+    GATEKEEPER_VALKEY_READ_TIMEOUT=750ms
+    GATEKEEPER_VALKEY_WRITE_TIMEOUT=750ms
+    GATEKEEPER_VALKEY_POOL_TIMEOUT=750ms
+
+These values are intentionally conservative for a same-VPC MemoryDB deployment and can be changed without rebuilding Gatekeeper.
+
 ## Network layout
 
 The authentication listener should normally be loopback-only because Caddy on the same node is its only caller. The management API may be bound to the node's private VPC address when Silverstripe runs elsewhere. Restrict the management port with the instance security group and retain the bearer token as defence in depth.
