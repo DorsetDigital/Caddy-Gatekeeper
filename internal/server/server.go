@@ -72,9 +72,13 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(
 
 func (s *Server) check(w http.ResponseWriter, r *http.Request) {
 	if cookie, err := r.Cookie(s.config.CookieName); err == nil {
-		ok, storeErr := s.validDevice(r.Context(), cookie.Value, r.Host)
+		ok, refreshCookie, storeErr := s.validDevice(r.Context(), cookie.Value, r.Host)
 		if storeErr != nil { http.Error(w, "Gatekeeper state unavailable", http.StatusServiceUnavailable); return }
-		if ok { w.WriteHeader(http.StatusNoContent); return }
+		if ok {
+			if refreshCookie { s.setDeviceCookie(w, cookie.Value) }
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 	}
 	http.Redirect(w, r, "/.gatekeeper/login?return="+url.QueryEscape(originalURL(r)), http.StatusFound)
 }
@@ -208,7 +212,7 @@ func (s *Server) completeChallenge(w http.ResponseWriter, r *http.Request) {
 	if err := s.config.Store.CreateDevice(r.Context(), tokenHash, store.Device{SiteID: ch.SiteID, IdentityID: ch.IdentityID, LastSeen: now}, s.config.DeviceLifetime); err != nil {
 		http.Error(w, "Gatekeeper state unavailable", http.StatusServiceUnavailable); return
 	}
-	http.SetCookie(w, &http.Cookie{Name:s.config.CookieName,Value:token,Path:"/",HttpOnly:true,Secure:s.config.CookieSecure,SameSite:http.SameSiteLaxMode,MaxAge:int(s.config.DeviceLifetime.Seconds())})
+	s.setDeviceCookie(w, token)
 	http.Redirect(w, r, ch.ReturnURL, http.StatusFound)
 }
 
@@ -220,21 +224,34 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) validDevice(ctx context.Context, token string, host string) (bool,error) {
+func (s *Server) validDevice(ctx context.Context, token string, host string) (bool,bool,error) {
 	key := hashString(token)
 	d,err := s.config.Store.GetDevice(ctx,key)
-	if errors.Is(err,store.ErrNotFound){return false,nil}
-	if err != nil{return false,err}
+	if errors.Is(err,store.ErrNotFound){return false,false,nil}
+	if err != nil{return false,false,err}
 	if s.config.Sites!=nil {
 		configured,siteErr:=s.config.Sites.GetByHost(ctx,host)
-		if errors.Is(siteErr,site.ErrNotFound)||siteErr==nil&&configured.ID!=d.SiteID{return false,nil}
-		if siteErr!=nil{return false,siteErr}
+		if errors.Is(siteErr,site.ErrNotFound)||siteErr==nil&&configured.ID!=d.SiteID{return false,false,nil}
+		if siteErr!=nil{return false,false,siteErr}
 	}
 	if time.Since(d.LastSeen) >= s.config.DeviceRefreshInterval {
 		d.LastSeen=time.Now()
-		if err:=s.config.Store.RefreshDevice(ctx,key,d,s.config.DeviceLifetime);err!=nil{return false,err}
+		if err:=s.config.Store.RefreshDevice(ctx,key,d,s.config.DeviceLifetime);err!=nil{return false,false,err}
+		return true,true,nil
 	}
-	return true,nil
+	return true,false,nil
+}
+
+func (s *Server) setDeviceCookie(w http.ResponseWriter, token string) {
+	http.SetCookie(w, &http.Cookie{
+		Name: s.config.CookieName,
+		Value: token,
+		Path: "/",
+		HttpOnly: true,
+		Secure: s.config.CookieSecure,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge: int(s.config.DeviceLifetime.Seconds()),
+	})
 }
 
 func originalURL(r *http.Request) string { uri:=r.Header.Get("X-Forwarded-Uri");if uri==""{uri="/"};return safeReturnURL(uri) }
