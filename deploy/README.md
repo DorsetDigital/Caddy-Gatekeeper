@@ -85,3 +85,19 @@ Gatekeeper handles SIGTERM and SIGINT by stopping both HTTP listeners, allowing 
     GATEKEEPER_SHUTDOWN_TIMEOUT=15s
 
 If the grace period expires, outstanding HTTP connections are force-closed and Gatekeeper exits rather than blocking service shutdown indefinitely.
+
+## Health and readiness
+
+Both listeners expose:
+
+    GET /health
+
+for process liveness, and:
+
+    GET /ready
+
+for dependency readiness. The readiness endpoint checks the managed site/config repository and returns 503 Service Unavailable if the backing state store cannot be reached.
+
+## Managed site validation
+
+Management API writes validate and normalise hosts and access rules before storing them. Unknown rule types, empty/invalid values, and duplicate hosts are rejected with 400 Bad Request. A hostname already owned by another managed site is rejected with 409 Conflict; Valkey host claims use atomic SETNX semantics so separate Gatekeeper nodes cannot silently assign the same host to different sites.
