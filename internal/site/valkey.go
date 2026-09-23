@@ -29,7 +29,8 @@ func(v *Valkey)Put(ctx context.Context,s Site)error{
 	var err error
 	s,err=ValidateAndNormalise(s);if err!=nil{return err}
 
-	old,_:=v.Get(ctx,s.ID)
+	old,err:=v.Get(ctx,s.ID)
+	if errors.Is(err,ErrNotFound){old=Site{}}else if err!=nil{return err}
 	acquired:=make([]string,0,len(s.Hosts))
 	rollback:=func(){
 		for _,h:=range acquired{
