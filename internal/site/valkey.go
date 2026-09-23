@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -92,18 +93,8 @@ func(v *Valkey)Delete(ctx context.Context,id string)error{
 }
 
 func normaliseHost(h string)string{
-	for len(h)>0&&h[len(h)-1]=='.'{h=h[:len(h)-1]}
-	for i:=0;i<len(h);i++{
-		if h[i]==':'{h=h[:i];break}
-	}
-	return lowerTrim(h)
-}
-
-func lowerTrim(value string)string{
-	start,end:=0,len(value)
-	for start<end&&(value[start]==' '||value[start]=='\t'||value[start]=='\r'||value[start]=='\n'){start++}
-	for end>start&&(value[end-1]==' '||value[end-1]=='\t'||value[end-1]=='\r'||value[end-1]=='\n'){end--}
-	out:=[]byte(value[start:end])
-	for i,b:=range out{if b>='A'&&b<='Z'{out[i]=b+('a'-'A')}}
-	return string(out)
+	h=strings.ToLower(strings.TrimSpace(h))
+	h=strings.TrimSuffix(h,".")
+	if i:=strings.IndexByte(h,':');i>=0{h=h[:i]}
+	return h
 }
