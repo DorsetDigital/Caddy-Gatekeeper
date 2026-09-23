@@ -2,27 +2,39 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/identity"
 	maildelivery "github.com/DorsetDigital/Caddy-Gatekeeper/internal/mail"
+	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/management"
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/ratelimit"
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/server"
-	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/management"
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/site"
 	"github.com/DorsetDigital/Caddy-Gatekeeper/internal/store"
 )
 
 func main() {
+	if err:=run();err!=nil {
+		log.Fatal(err)
+	}
+}
+
+func run() error {
 	addr := env("GATEKEEPER_LISTEN", ":9080")
 	state, err := buildStore(context.Background())
-	if err != nil { log.Fatalf("initialise state store: %v", err) }
+	if err != nil { return fmt.Errorf("initialise state store: %w", err) }
 	defer state.Close()
+
 	var sites site.Repository
 	var limiter ratelimit.Limiter
 	if valkeyStore,ok:=state.(*store.Valkey);ok{
@@ -32,16 +44,19 @@ func main() {
 		sites=site.NewMemory()
 		limiter=ratelimit.NewMemory()
 	}
+
 	apiAddr:=env("GATEKEEPER_API_LISTEN",":9081")
 	api:=management.New(sites,requiredEnv("GATEKEEPER_API_TOKEN"))
-	go func(){
-		log.Printf("caddy-gatekeeper management API listening on %s",apiAddr)
-		apiServer:=&http.Server{Addr:apiAddr,Handler:api.Handler(),ReadHeaderTimeout:5*time.Second,ReadTimeout:10*time.Second,WriteTimeout:15*time.Second,IdleTimeout:60*time.Second}
-		if err:=apiServer.ListenAndServe();err!=nil&&err!=http.ErrServerClosed{log.Fatalf("management API: %v",err)}
-	}()
+	apiServer:=&http.Server{
+		Addr:apiAddr,
+		Handler:api.Handler(),
+		ReadHeaderTimeout:5*time.Second,
+		ReadTimeout:10*time.Second,
+		WriteTimeout:15*time.Second,
+		IdleTimeout:60*time.Second,
+	}
 
 	dispatcher:=buildMailDispatcher()
-	if dispatcher!=nil { defer dispatcher.Close() }
 
 	app := server.New(server.Config{
 		Sites: sites,
@@ -59,7 +74,7 @@ func main() {
 		IdentityRateLimit: envInt("GATEKEEPER_IDENTITY_RATE_LIMIT", 2),
 		IdentityRateWindow: envDuration("GATEKEEPER_IDENTITY_RATE_WINDOW", 10*time.Minute),
 	})
-	log.Printf("caddy-gatekeeper listening on %s", addr)
+
 	httpServer:=&http.Server{
 		Addr:addr,
 		Handler:app.Handler(),
@@ -68,7 +83,71 @@ func main() {
 		WriteTimeout:15*time.Second,
 		IdleTimeout:60*time.Second,
 	}
-	log.Fatal(httpServer.ListenAndServe())
+
+	serverErrors:=make(chan error,2)
+	startServer:=func(name string,srv *http.Server){
+		go func(){
+			if err:=srv.ListenAndServe();err!=nil&&!errors.Is(err,http.ErrServerClosed){
+				serverErrors<-fmt.Errorf("%s: %w",name,err)
+			}
+		}()
+	}
+
+	log.Printf("caddy-gatekeeper management API listening on %s",apiAddr)
+	startServer("management API",apiServer)
+	log.Printf("caddy-gatekeeper listening on %s",addr)
+	startServer("authentication server",httpServer)
+
+	signalCtx,stopSignals:=signal.NotifyContext(context.Background(),os.Interrupt,syscall.SIGTERM)
+	defer stopSignals()
+
+	var runErr error
+	select{
+	case <-signalCtx.Done():
+		log.Printf("caddy-gatekeeper shutdown requested")
+	case runErr=<-serverErrors:
+		log.Printf("caddy-gatekeeper server failure: %v",runErr)
+	}
+
+	shutdownTimeout:=envDuration("GATEKEEPER_SHUTDOWN_TIMEOUT",15*time.Second)
+	shutdownCtx,cancel:=context.WithTimeout(context.Background(),shutdownTimeout)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	shutdownErrors:=make(chan error,2)
+	shutdownServer:=func(name string,srv *http.Server){
+		defer wg.Done()
+		if err:=srv.Shutdown(shutdownCtx);err!=nil{
+			_ = srv.Close()
+			shutdownErrors<-fmt.Errorf("%s shutdown: %w",name,err)
+		}
+	}
+
+	wg.Add(2)
+	go shutdownServer("authentication server",httpServer)
+	go shutdownServer("management API",apiServer)
+	wg.Wait()
+	close(shutdownErrors)
+
+	var shutdownErr error
+	for err:=range shutdownErrors{
+		shutdownErr=errors.Join(shutdownErr,err)
+	}
+
+	if dispatcher!=nil{
+		if err:=dispatcher.Shutdown(shutdownCtx);err!=nil{
+			shutdownErr=errors.Join(shutdownErr,fmt.Errorf("SMTP dispatcher shutdown: %w",err))
+		}
+	}
+
+	if shutdownErr!=nil{
+		log.Printf("caddy-gatekeeper shutdown completed with errors: %v",shutdownErr)
+	}else{
+		log.Printf("caddy-gatekeeper shutdown complete")
+	}
+
+	if runErr!=nil{return runErr}
+	return shutdownErr
 }
 
 func buildMailDispatcher() maildelivery.Dispatcher {
