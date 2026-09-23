@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -17,31 +17,93 @@ func(v *Valkey)siteKey(id string)string{return v.prefix+"config:site:"+id}
 func(v *Valkey)hostKey(host string)string{return v.prefix+"config:host:"+normaliseHost(host)}
 func(v *Valkey)indexKey()string{return v.prefix+"config:sites"}
 
+var releaseHostScript=redis.NewScript(`
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  return redis.call('DEL', KEYS[1])
+end
+return 0
+`)
+
 func(v *Valkey)Put(ctx context.Context,s Site)error{
-	s.ID=strings.TrimSpace(s.ID);if s.ID==""{return errors.New("site id is required")}
+	var err error
+	s,err=ValidateAndNormalise(s);if err!=nil{return err}
+
 	old,_:=v.Get(ctx,s.ID)
-	for i:=range s.Hosts{s.Hosts[i]=normaliseHost(s.Hosts[i])}
-	data,err:=json.Marshal(s);if err!=nil{return err}
+	acquired:=make([]string,0,len(s.Hosts))
+	rollback:=func(){
+		for _,h:=range acquired{
+			_,_=releaseHostScript.Run(context.Background(),v.client,[]string{v.hostKey(h)},s.ID).Result()
+		}
+	}
+
+	for _,h:=range s.Hosts{
+		key:=v.hostKey(h)
+		claimed,err:=v.client.SetNX(ctx,key,s.ID,0).Result()
+		if err!=nil{rollback();return err}
+		if claimed{acquired=append(acquired,h);continue}
+
+		owner,err:=v.client.Get(ctx,key).Result()
+		if err!=nil{rollback();return err}
+		if owner!=s.ID{rollback();return fmt.Errorf("%w: %s",ErrHostConflict,h)}
+	}
+
+	data,err:=json.Marshal(s);if err!=nil{rollback();return err}
 	pipe:=v.client.TxPipeline()
-	pipe.Set(ctx,v.siteKey(s.ID),data,0);pipe.SAdd(ctx,v.indexKey(),s.ID)
-	for _,h:=range old.Hosts{pipe.Del(ctx,v.hostKey(h))}
-	for _,h:=range s.Hosts{if h!=""{pipe.Set(ctx,v.hostKey(h),s.ID,0)}}
-	_,err=pipe.Exec(ctx);return err
+	pipe.Set(ctx,v.siteKey(s.ID),data,0)
+	pipe.SAdd(ctx,v.indexKey(),s.ID)
+	if _,err=pipe.Exec(ctx);err!=nil{rollback();return err}
+
+	current:=make(map[string]struct{},len(s.Hosts))
+	for _,h:=range s.Hosts{current[h]=struct{}{}}
+	for _,h:=range old.Hosts{
+		h=normaliseHost(h)
+		if _,keep:=current[h];keep{continue}
+		if _,err:=releaseHostScript.Run(ctx,v.client,[]string{v.hostKey(h)},s.ID).Result();err!=nil{return err}
+	}
+	return nil
 }
+
 func(v *Valkey)Get(ctx context.Context,id string)(Site,error){
 	raw,err:=v.client.Get(ctx,v.siteKey(id)).Bytes();if errors.Is(err,redis.Nil){return Site{},ErrNotFound};if err!=nil{return Site{},err}
 	var s Site;if err:=json.Unmarshal(raw,&s);err!=nil{return Site{},err};return s,nil
 }
+
 func(v *Valkey)GetByHost(ctx context.Context,host string)(Site,error){
-	id,err:=v.client.Get(ctx,v.hostKey(host)).Result();if errors.Is(err,redis.Nil){return Site{},ErrNotFound};if err!=nil{return Site{},err};return v.Get(ctx,id)
+	host=normaliseHost(host)
+	id,err:=v.client.Get(ctx,v.hostKey(host)).Result();if errors.Is(err,redis.Nil){return Site{},ErrNotFound};if err!=nil{return Site{},err}
+	s,err:=v.Get(ctx,id);if err!=nil{return Site{},err}
+	for _,configured:=range s.Hosts{if normaliseHost(configured)==host{return s,nil}}
+	return Site{},ErrNotFound
 }
+
 func(v *Valkey)List(ctx context.Context)([]Site,error){
 	ids,err:=v.client.SMembers(ctx,v.indexKey()).Result();if err!=nil{return nil,err};sort.Strings(ids)
 	out:=make([]Site,0,len(ids));for _,id:=range ids{s,err:=v.Get(ctx,id);if errors.Is(err,ErrNotFound){continue};if err!=nil{return nil,err};out=append(out,s)}
 	return out,nil
 }
+
 func(v *Valkey)Delete(ctx context.Context,id string)error{
 	s,err:=v.Get(ctx,id);if errors.Is(err,ErrNotFound){return nil};if err!=nil{return err}
-	pipe:=v.client.TxPipeline();pipe.Del(ctx,v.siteKey(id));pipe.SRem(ctx,v.indexKey(),id);for _,h:=range s.Hosts{pipe.Del(ctx,v.hostKey(h))};_,err=pipe.Exec(ctx);return err
+	pipe:=v.client.TxPipeline();pipe.Del(ctx,v.siteKey(id));pipe.SRem(ctx,v.indexKey(),id);if _,err=pipe.Exec(ctx);err!=nil{return err}
+	for _,h:=range s.Hosts{
+		if _,err:=releaseHostScript.Run(ctx,v.client,[]string{v.hostKey(h)},id).Result();err!=nil{return err}
+	}
+	return nil
 }
-func normaliseHost(h string)string{h=strings.ToLower(strings.TrimSpace(h));if i:=strings.IndexByte(h,':');i>=0{h=h[:i]};return h}
+
+func normaliseHost(h string)string{
+	for len(h)>0&&h[len(h)-1]=='.'{h=h[:len(h)-1]}
+	for i:=0;i<len(h);i++{
+		if h[i]==':'{h=h[:i];break}
+	}
+	return lowerTrim(h)
+}
+
+func lowerTrim(value string)string{
+	start,end:=0,len(value)
+	for start<end&&(value[start]==' '||value[start]=='\t'||value[start]=='\r'||value[start]=='\n'){start++}
+	for end>start&&(value[end-1]==' '||value[end-1]=='\t'||value[end-1]=='\r'||value[end-1]=='\n'){end--}
+	out:=[]byte(value[start:end])
+	for i,b:=range out{if b>='A'&&b<='Z'{out[i]=b+('a'-'A')}}
+	return string(out)
+}
