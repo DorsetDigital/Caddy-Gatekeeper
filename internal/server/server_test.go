@@ -21,11 +21,11 @@ import (
 
 type captureDispatcher struct { messages chan maildelivery.Message }
 func (s *captureDispatcher) Enqueue(m maildelivery.Message) error { s.messages<-m;return nil }
-func (s *captureDispatcher) Close() {}
+func (s *captureDispatcher) Shutdown(context.Context) error { return nil }
 
 type fullDispatcher struct{}
 func (fullDispatcher) Enqueue(maildelivery.Message) error { return maildelivery.ErrQueueFull }
-func (fullDispatcher) Close() {}
+func (fullDispatcher) Shutdown(context.Context) error { return nil }
 
 type blockingLimiter struct{}
 func (blockingLimiter) Allow(ctx context.Context, _ string, _ int, _ time.Duration) (ratelimit.Result, error) {
