@@ -56,3 +56,16 @@ func TestPutRejectsHostOwnedByAnotherSite(t *testing.T) {
 	if got:=put("a");got!=http.StatusOK{t.Fatalf("first PUT status=%d",got)}
 	if got:=put("b");got!=http.StatusConflict{t.Fatalf("second PUT status=%d, want 409",got)}
 }
+
+
+func TestPutRejectsTrailingJSON(t *testing.T) {
+	s:=New(site.NewMemory(),"token")
+	req:=httptest.NewRequest(http.MethodPut,"/api/v1/sites/a",bytes.NewBufferString(
+		`{"hosts":["example.com"],"access_rules":[]}`+"\n"+`{"hosts":["second.example.com"]}`,
+	))
+	req.Header.Set("Authorization","Bearer token")
+	req.Header.Set("Content-Type","application/json")
+	res:=httptest.NewRecorder()
+	s.Handler().ServeHTTP(res,req)
+	if res.Code!=http.StatusBadRequest{t.Fatalf("status=%d, want 400",res.Code)}
+}
