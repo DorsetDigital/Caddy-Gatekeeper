@@ -97,4 +97,7 @@ func TestAsyncDispatcherShutdownRespectsDeadline(t *testing.T) {
 	if !errors.Is(err,context.DeadlineExceeded){t.Fatalf("shutdown error=%v, want deadline exceeded",err)}
 	if elapsed>250*time.Millisecond{t.Fatalf("shutdown took %s, want under 250ms",elapsed)}
 	close(sender.release)
+	finishCtx,finishCancel:=context.WithTimeout(context.Background(),time.Second)
+	defer finishCancel()
+	if err:=dispatcher.Shutdown(finishCtx);err!=nil{t.Fatalf("final shutdown: %v",err)}
 }
