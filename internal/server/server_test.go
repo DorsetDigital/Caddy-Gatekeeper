@@ -296,3 +296,23 @@ func TestReadyReportsSiteStoreHealth(t *testing.T){
 	unhealthy.Handler().ServeHTTP(unhealthyRes,unhealthyReq)
 	if unhealthyRes.Code!=http.StatusServiceUnavailable{t.Fatalf("unhealthy readiness status=%d",unhealthyRes.Code)}
 }
+
+
+type failingEntropyReader struct{}
+func (failingEntropyReader) Read([]byte)(int,error){return 0,errors.New("entropy unavailable")}
+
+func TestEntropyFailureFailsRequestClosed(t *testing.T){
+	previous:=entropyReader
+	entropyReader=failingEntropyReader{}
+	defer func(){entropyReader=previous}()
+
+	s,_:=testServer()
+	form:=url.Values{"email":{"developer@example.test"},"return":{"/admin"}}
+	req:=httptest.NewRequest(http.MethodPost,"/login",strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type","application/x-www-form-urlencoded")
+	res:=httptest.NewRecorder()
+	s.Handler().ServeHTTP(res,req)
+
+	if res.Code!=http.StatusServiceUnavailable{t.Fatalf("status=%d, want 503",res.Code)}
+	if _,err:=randomCode();err==nil{t.Fatal("randomCode accepted failed entropy source")}
+}
