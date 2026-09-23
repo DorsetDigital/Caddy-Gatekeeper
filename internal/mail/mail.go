@@ -24,7 +24,7 @@ type Sender interface {
 
 type Dispatcher interface {
 	Enqueue(Message) error
-	Close()
+	Shutdown(context.Context) error
 }
 
 type SMTP struct {
@@ -109,7 +109,10 @@ func (s SMTP) Send(ctx context.Context, m Message) error {
 	return nil
 }
 
-var ErrQueueFull = errors.New("SMTP delivery queue full")
+var (
+	ErrQueueFull = errors.New("SMTP delivery queue full")
+	ErrDispatcherClosed = errors.New("SMTP delivery dispatcher closed")
+)
 
 func OTPMessage(to,host,code string) Message {
 	subject:="Website access code"
