@@ -33,6 +33,13 @@ func (blockingLimiter) Allow(ctx context.Context, _ string, _ int, _ time.Durati
 	return ratelimit.Result{}, ctx.Err()
 }
 
+type failingSiteRepository struct{}
+func (failingSiteRepository) Put(context.Context,site.Site)error{return errors.New("unavailable")}
+func (failingSiteRepository) Get(context.Context,string)(site.Site,error){return site.Site{},errors.New("unavailable")}
+func (failingSiteRepository) GetByHost(context.Context,string)(site.Site,error){return site.Site{},errors.New("unavailable")}
+func (failingSiteRepository) List(context.Context)([]site.Site,error){return nil,errors.New("unavailable")}
+func (failingSiteRepository) Delete(context.Context,string)error{return errors.New("unavailable")}
+
 func testServer() (*Server,*store.Memory) {
 	st:=store.NewMemory()
 	return New(Config{AccessMatcher:access.NewMatcher([]access.Rule{{Type:access.RuleEmail,Value:"developer@example.test"}}),CookieName:"gatekeeper_device",DeviceLifetime:30*24*time.Hour,MaxAttempts:3,IdentityHasher:identity.NewHasher("test-key"),Store:st}),st
@@ -261,4 +268,30 @@ func TestStateTimeoutFailsClosed(t *testing.T){
 
 	if res.Code!=503{t.Fatalf("status=%d, want 503",res.Code)}
 	if elapsed>250*time.Millisecond{t.Fatalf("state timeout took %s, want under 250ms",elapsed)}
+}
+
+
+func TestReadyReportsSiteStoreHealth(t *testing.T){
+	healthy:=New(Config{
+		Sites:site.NewMemory(),
+		CookieName:"gatekeeper_device",
+		IdentityHasher:identity.NewHasher("test-key"),
+		Store:store.NewMemory(),
+	})
+	healthyReq:=httptest.NewRequest(http.MethodGet,"/ready",nil)
+	healthyRes:=httptest.NewRecorder()
+	healthy.Handler().ServeHTTP(healthyRes,healthyReq)
+	if healthyRes.Code!=http.StatusNoContent{t.Fatalf("healthy readiness status=%d",healthyRes.Code)}
+
+	unhealthy:=New(Config{
+		Sites:failingSiteRepository{},
+		CookieName:"gatekeeper_device",
+		IdentityHasher:identity.NewHasher("test-key"),
+		Store:store.NewMemory(),
+		StateTimeout:20*time.Millisecond,
+	})
+	unhealthyReq:=httptest.NewRequest(http.MethodGet,"/ready",nil)
+	unhealthyRes:=httptest.NewRecorder()
+	unhealthy.Handler().ServeHTTP(unhealthyRes,unhealthyReq)
+	if unhealthyRes.Code!=http.StatusServiceUnavailable{t.Fatalf("unhealthy readiness status=%d",unhealthyRes.Code)}
 }
