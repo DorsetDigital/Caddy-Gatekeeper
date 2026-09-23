@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 
@@ -38,6 +39,7 @@ func(s *Server)put(w http.ResponseWriter,r *http.Request){
 	r.Body=http.MaxBytesReader(w,r.Body,64<<10);var v site.Site
 	decoder:=json.NewDecoder(r.Body);decoder.DisallowUnknownFields()
 	if err:=decoder.Decode(&v);err!=nil{http.Error(w,"Invalid JSON",http.StatusBadRequest);return}
+	if err:=decoder.Decode(&struct{}{});err!=io.EOF{http.Error(w,"Invalid JSON",http.StatusBadRequest);return}
 	v.ID=r.PathValue("id")
 	normalised,err:=site.ValidateAndNormalise(v)
 	if err!=nil{http.Error(w,err.Error(),http.StatusBadRequest);return}
