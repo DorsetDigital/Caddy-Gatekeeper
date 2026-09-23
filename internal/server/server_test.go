@@ -316,3 +316,29 @@ func TestEntropyFailureFailsRequestClosed(t *testing.T){
 	if res.Code!=http.StatusServiceUnavailable{t.Fatalf("status=%d, want 503",res.Code)}
 	if _,err:=randomCode();err==nil{t.Fatal("randomCode accepted failed entropy source")}
 }
+
+
+func TestDisplayHost(t *testing.T){
+	tests:=map[string]string{
+		"Example.COM":"example.com",
+		"Example.COM:443":"example.com",
+		"example.com.":"example.com",
+	}
+	for input,want:=range tests{
+		if got:=displayHost(input);got!=want{t.Fatalf("displayHost(%q)=%q, want %q",input,got,want)}
+	}
+}
+
+func TestLoginPageShowsProtectedHostname(t *testing.T){
+	s,_:=testServer()
+	req:=httptest.NewRequest(http.MethodGet,"http://example.test/login?return=%2Fadmin",nil)
+	req.Host="Protected.Example.COM:443"
+	res:=httptest.NewRecorder()
+	s.Handler().ServeHTTP(res,req)
+
+	if res.Code!=http.StatusOK{t.Fatalf("status=%d, want 200",res.Code)}
+	body:=res.Body.String()
+	if !strings.Contains(body,"https://protected.example.com"){t.Fatalf("login page missing protected hostname: %s",body)}
+	if !strings.Contains(body,"Biff Bang Pow."){t.Fatal("login page missing BBP branding")}
+	if strings.Contains(body,":443"){t.Fatal("login page exposed host port")}
+}
