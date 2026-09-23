@@ -11,6 +11,7 @@ import (
 	"html/template"
 	"io"
 	"math/big"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -106,7 +107,7 @@ func (s *Server) check(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
-	render(w, loginTemplate, map[string]string{"ReturnURL": safeReturnURL(r.URL.Query().Get("return"))})
+	render(w, loginTemplate, map[string]string{"ReturnURL": safeReturnURL(r.URL.Query().Get("return")), "Host": displayHost(r.Host)})
 }
 
 func (s *Server) startChallenge(w http.ResponseWriter, r *http.Request) {
@@ -206,9 +207,9 @@ func (s *Server) allowOTPRequest(w http.ResponseWriter, r *http.Request, siteID,
 func (s *Server) verify(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
 	_, err := s.config.Store.GetChallenge(r.Context(), id)
-	if errors.Is(err, store.ErrNotFound) { render(w, expiredTemplate, map[string]string{"ReturnURL": "/"}); return }
+	if errors.Is(err, store.ErrNotFound) { render(w, expiredTemplate, map[string]string{"ReturnURL": "/", "Host": displayHost(r.Host)}); return }
 	if err != nil { http.Error(w, "Gatekeeper state unavailable", http.StatusServiceUnavailable); return }
-	render(w, verifyTemplate, map[string]string{"ID": id})
+	render(w, verifyTemplate, map[string]string{"ID": id, "Host": displayHost(r.Host)})
 }
 
 func (s *Server) completeChallenge(w http.ResponseWriter, r *http.Request) {
@@ -219,13 +220,13 @@ func (s *Server) completeChallenge(w http.ResponseWriter, r *http.Request) {
 	if err != nil { http.Error(w, "Gatekeeper state unavailable", http.StatusServiceUnavailable); return }
 	switch result.Status {
 	case store.VerifyNotFound:
-		render(w, expiredTemplate, map[string]string{"ReturnURL": "/"})
+		render(w, expiredTemplate, map[string]string{"ReturnURL": "/", "Host": displayHost(r.Host)})
 		return
 	case store.VerifyInvalid:
-		render(w, invalidCodeTemplate, map[string]any{"ID": id, "AttemptsLeft": result.Remaining})
+		render(w, invalidCodeTemplate, map[string]any{"ID": id, "AttemptsLeft": result.Remaining, "Host": displayHost(r.Host)})
 		return
 	case store.VerifyExhausted:
-		render(w, expiredTemplate, map[string]string{"ReturnURL": result.Challenge.ReturnURL})
+		render(w, expiredTemplate, map[string]string{"ReturnURL": result.Challenge.ReturnURL, "Host": displayHost(r.Host)})
 		return
 	case store.VerifySuccess:
 		// Continue below with the challenge that was atomically consumed.
@@ -287,6 +288,14 @@ func (s *Server) setDeviceCookie(w http.ResponseWriter, token string) {
 func originalURL(r *http.Request) string { uri:=r.Header.Get("X-Forwarded-Uri");if uri==""{uri="/"};return safeReturnURL(uri) }
 func safeReturnURL(value string) string { if value==""||!strings.HasPrefix(value,"/")||strings.HasPrefix(value,"//"){return "/"};return value }
 func normaliseIdentity(value string) string { return strings.ToLower(strings.TrimSpace(value)) }
+func displayHost(hostport string) string {
+	hostport = strings.TrimSpace(hostport)
+	if host, _, err := net.SplitHostPort(hostport); err == nil {
+		return strings.ToLower(strings.TrimSuffix(host, "."))
+	}
+	return strings.ToLower(strings.TrimSuffix(hostport, "."))
+}
+
 var entropyReader io.Reader = rand.Reader
 
 func randomToken(size int)(string,error){
@@ -306,8 +315,37 @@ func hashString(value string)string{return fmt.Sprintf("%x",hashValue(value))}
 func render(w http.ResponseWriter,source string,data any){t:=template.Must(template.New("page").Parse(source));w.Header().Set("Content-Type","text/html; charset=utf-8");_ = t.Execute(w,data)}
 func securityHeaders(next http.Handler)http.Handler{return http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){w.Header().Set("X-Content-Type-Options","nosniff");w.Header().Set("X-Frame-Options","DENY");w.Header().Set("Referrer-Policy","no-referrer");w.Header().Set("Cache-Control","no-store");next.ServeHTTP(w,r)})}
 
-const style="<style>body{font-family:system-ui,sans-serif;background:#f5f6f8;color:#20242a;margin:0}main{max-width:28rem;margin:12vh auto;background:white;padding:2rem;border-radius:.75rem;box-shadow:0 8px 30px #0001}h1{margin-top:0}label{display:block;margin:.75rem 0 .35rem}input{box-sizing:border-box;width:100%;padding:.8rem;font:inherit}button{margin-top:1rem;padding:.8rem 1rem;font:inherit;cursor:pointer}p{line-height:1.5;color:#505760}</style>"
-const loginTemplate=`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">`+style+`<title>Access required</title></head><body><main><h1>Access required</h1><p>Enter your authorised email address. If it has access, we'll send you a one-time code.</p><form method="post" action="/.gatekeeper/login"><input type="hidden" name="return" value="{{.ReturnURL}}"><label for="email">Email address</label><input id="email" name="email" type="email" autocomplete="email" required autofocus><button type="submit">Send access code</button></form></main></body></html>`
-const verifyTemplate=`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">`+style+`<title>Enter access code</title></head><body><main><h1>Check your email</h1><p>Enter the access code from your email. It expires after 10 minutes.</p><form method="post" action="/.gatekeeper/verify"><input type="hidden" name="id" value="{{.ID}}"><label for="code">Access code</label><input id="code" name="code" autocomplete="one-time-code" required autofocus><button type="submit">Continue</button></form></main></body></html>`
-const invalidCodeTemplate=`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">`+style+`<title>Invalid access code</title></head><body><main><h1>That code was not accepted</h1><p>Please check the code and try again. You have {{.AttemptsLeft}} attempts remaining.</p><form method="post" action="/.gatekeeper/verify"><input type="hidden" name="id" value="{{.ID}}"><label for="code">Access code</label><input id="code" name="code" autocomplete="one-time-code" required autofocus><button type="submit">Continue</button></form></main></body></html>`
-const expiredTemplate=`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">`+style+`<title>Request a new code</title></head><body><main><h1>Request a new code</h1><p>This access challenge has expired or can no longer be used.</p><p><a href="/.gatekeeper/login?return={{urlquery .ReturnURL}}">Start again</a></p></main></body></html>`
+const style=`<style>
+:root{color-scheme:light;--ink:#111214;--muted:#656a73;--line:#e5e7eb;--panel:#fff;--page:#f3f4f6;--accent:#f2ff00}
+*{box-sizing:border-box}
+html,body{min-height:100%}
+body{margin:0;background:var(--page);color:var(--ink);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.shell{min-height:100vh;display:grid;place-items:center;padding:2rem 1rem}
+.card{width:min(100%,32rem);background:var(--panel);border:1px solid var(--line);border-radius:1rem;box-shadow:0 18px 50px rgba(17,18,20,.08);overflow:hidden}
+.brand{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:1.1rem 1.4rem;background:var(--ink);color:#fff}
+.wordmark{font-weight:800;letter-spacing:-.035em;font-size:1.15rem}
+.badge{width:.8rem;height:.8rem;border-radius:50%;background:var(--accent);box-shadow:0 0 0 .24rem rgba(242,255,0,.12)}
+.content{padding:2rem}
+.eyebrow{margin:0 0 .75rem;color:var(--muted);font-size:.78rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+h1{margin:0 0 .8rem;font-size:clamp(1.7rem,4vw,2.2rem);line-height:1.08;letter-spacing:-.035em}
+p{margin:.6rem 0;line-height:1.55;color:var(--muted)}
+.site{margin:1.4rem 0;padding:.9rem 1rem;border:1px solid var(--line);border-radius:.65rem;background:#fafafa;color:var(--ink);font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:.9rem;overflow-wrap:anywhere}
+label{display:block;margin:1.3rem 0 .45rem;font-size:.9rem;font-weight:700}
+input{width:100%;border:1px solid #cfd3d9;border-radius:.55rem;padding:.85rem .9rem;font:inherit;background:#fff;color:var(--ink);outline:none}
+input:focus{border-color:var(--ink);box-shadow:0 0 0 3px rgba(17,18,20,.08)}
+button,.button{display:inline-flex;align-items:center;justify-content:center;margin-top:1rem;border:0;border-radius:.55rem;background:var(--ink);color:#fff;padding:.82rem 1rem;font:inherit;font-weight:700;text-decoration:none;cursor:pointer}
+button:hover,.button:hover{background:#2a2c30}
+.meta{margin-top:1.6rem;padding-top:1.15rem;border-top:1px solid var(--line);font-size:.82rem;color:#7b8088}
+.meta a{color:inherit}
+.code input{font-size:1.25rem;letter-spacing:.22em;text-align:center;font-variant-numeric:tabular-nums}
+.notice{margin:1rem 0;padding:.8rem .9rem;border-radius:.55rem;background:#f6f6f6;color:var(--ink);font-size:.9rem}
+</style>`
+
+const loginTemplate=`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Security check · {{.Host}}</title>`+style+`</head><body><div class="shell"><main class="card"><div class="brand"><span class="wordmark">Biff Bang Pow.</span><span class="badge" aria-hidden="true"></span></div><div class="content"><p class="eyebrow">Secure website access</p><h1>Confirm your email address</h1><p>This area is protected by Biff Bang Pow before you continue to the website administration system.</p><div class="site">https://{{.Host}}</div><p>Enter your authorised email address. If it has access, we'll send a one-time code.</p><form method="post" action="/.gatekeeper/login"><input type="hidden" name="return" value="{{.ReturnURL}}"><label for="email">Email address</label><input id="email" name="email" type="email" autocomplete="email" inputmode="email" required autofocus><button type="submit">Send access code</button></form><div class="meta">Security check provided by Biff Bang Pow.</div></div></main></div></body></html>`
+
+const verifyTemplate=`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Enter access code · {{.Host}}</title>`+style+`</head><body><div class="shell"><main class="card"><div class="brand"><span class="wordmark">Biff Bang Pow.</span><span class="badge" aria-hidden="true"></span></div><div class="content"><p class="eyebrow">Secure website access</p><h1>Check your email</h1><div class="site">https://{{.Host}}</div><p>If the address is authorised, a six-digit access code has been sent. Enter it below to continue. Codes expire after 10 minutes.</p><form class="code" method="post" action="/.gatekeeper/verify"><input type="hidden" name="id" value="{{.ID}}"><label for="code">Access code</label><input id="code" name="code" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" maxlength="6" required autofocus><button type="submit">Continue</button></form><div class="meta">Security check provided by Biff Bang Pow.</div></div></main></div></body></html>`
+
+const invalidCodeTemplate=`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Access code not accepted · {{.Host}}</title>`+style+`</head><body><div class="shell"><main class="card"><div class="brand"><span class="wordmark">Biff Bang Pow.</span><span class="badge" aria-hidden="true"></span></div><div class="content"><p class="eyebrow">Secure website access</p><h1>That code wasn't accepted</h1><div class="site">https://{{.Host}}</div><div class="notice">Check the code and try again. You have {{.AttemptsLeft}} attempts remaining.</div><form class="code" method="post" action="/.gatekeeper/verify"><input type="hidden" name="id" value="{{.ID}}"><label for="code">Access code</label><input id="code" name="code" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" maxlength="6" required autofocus><button type="submit">Try again</button></form><div class="meta">Security check provided by Biff Bang Pow.</div></div></main></div></body></html>`
+
+const expiredTemplate=`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Access check expired · {{.Host}}</title>`+style+`</head><body><div class="shell"><main class="card"><div class="brand"><span class="wordmark">Biff Bang Pow.</span><span class="badge" aria-hidden="true"></span></div><div class="content"><p class="eyebrow">Secure website access</p><h1>Request a new code</h1><div class="site">https://{{.Host}}</div><p>This security check has expired or can no longer be used. Start again to request a new access code.</p><a class="button" href="/.gatekeeper/login?return={{urlquery .ReturnURL}}">Start again</a><div class="meta">Security check provided by Biff Bang Pow.</div></div></main></div></body></html>`
+
