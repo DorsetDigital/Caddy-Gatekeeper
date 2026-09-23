@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"html/template"
+	"io"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -123,8 +124,13 @@ func (s *Server) startChallenge(w http.ResponseWriter, r *http.Request) {
 	identityID := s.config.IdentityHasher.ID(email)
 	if !s.allowOTPRequest(w,r,siteID,identityID) { return }
 	authorised := matcher.Allowed(email)
-	id, code := randomToken(24), randomCode()
-	codeHash := hashValue(randomToken(32))
+	id,err:=randomToken(24)
+	if err!=nil{http.Error(w,"Gatekeeper entropy unavailable",http.StatusServiceUnavailable);return}
+	code,err:=randomCode()
+	if err!=nil{http.Error(w,"Gatekeeper entropy unavailable",http.StatusServiceUnavailable);return}
+	fakeSecret,err:=randomToken(32)
+	if err!=nil{http.Error(w,"Gatekeeper entropy unavailable",http.StatusServiceUnavailable);return}
+	codeHash := hashValue(fakeSecret)
 	if authorised { codeHash = hashValue(code) }
 
 	ch := store.Challenge{SiteID: siteID, IdentityID: identityID, CodeHash: codeHash[:], ReturnURL: returnURL}
@@ -229,7 +235,8 @@ func (s *Server) completeChallenge(w http.ResponseWriter, r *http.Request) {
 	}
 	ch := result.Challenge
 
-	token := randomToken(32)
+	token,err := randomToken(32)
+	if err!=nil{http.Error(w,"Gatekeeper entropy unavailable",http.StatusServiceUnavailable);return}
 	tokenHash := hashString(token)
 	now := time.Now()
 	if err := s.config.Store.CreateDevice(r.Context(), tokenHash, store.Device{SiteID: ch.SiteID, IdentityID: ch.IdentityID, LastSeen: now}, s.config.DeviceLifetime); err != nil {
@@ -280,8 +287,18 @@ func (s *Server) setDeviceCookie(w http.ResponseWriter, token string) {
 func originalURL(r *http.Request) string { uri:=r.Header.Get("X-Forwarded-Uri");if uri==""{uri="/"};return safeReturnURL(uri) }
 func safeReturnURL(value string) string { if value==""||!strings.HasPrefix(value,"/")||strings.HasPrefix(value,"//"){return "/"};return value }
 func normaliseIdentity(value string) string { return strings.ToLower(strings.TrimSpace(value)) }
-func randomToken(size int) string { buf:=make([]byte,size);if _,err:=rand.Read(buf);err!=nil{panic(err)};return base64.RawURLEncoding.EncodeToString(buf) }
-func randomCode() string { n,err:=rand.Int(rand.Reader,big.NewInt(1000000));if err!=nil{panic(err)};return fmt.Sprintf("%06d",n.Int64()) }
+var entropyReader io.Reader = rand.Reader
+
+func randomToken(size int)(string,error){
+	buf:=make([]byte,size)
+	if _,err:=io.ReadFull(entropyReader,buf);err!=nil{return "",err}
+	return base64.RawURLEncoding.EncodeToString(buf),nil
+}
+func randomCode()(string,error){
+	n,err:=rand.Int(entropyReader,big.NewInt(1000000))
+	if err!=nil{return "",err}
+	return fmt.Sprintf("%06d",n.Int64()),nil
+}
 func hashValue(value string)[32]byte{return sha256.Sum256([]byte(value))}
 func hashBytes(value string)[]byte{h:=hashValue(value);return h[:]}
 func hashString(value string)string{return fmt.Sprintf("%x",hashValue(value))}
