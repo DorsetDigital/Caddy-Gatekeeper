@@ -1,0 +1,22 @@
+:80 {
+	route {
+		handle_path /.gatekeeper/* {
+			reverse_proxy gatekeeper:9080
+		}
+
+		@protected path /protected /protected/*
+		forward_auth @protected gatekeeper:9080 {
+			uri /auth/check
+		}
+
+		handle /protected* {
+			respond "You passed Gatekeeper. In the next milestone this will be your DDEV upstream.
+" 200
+		}
+
+		handle {
+			respond "Caddy Gatekeeper development environment. Try /protected
+" 200
+		}
+	}
+}

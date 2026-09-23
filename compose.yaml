@@ -1,0 +1,51 @@
+services:
+  gatekeeper:
+    build: .
+    environment:
+      GATEKEEPER_LISTEN: ":9080"
+      GATEKEEPER_API_LISTEN: ":9081"
+      GATEKEEPER_API_TOKEN: "development-management-token"
+      GATEKEEPER_COOKIE_SECURE: "false"
+      GATEKEEPER_MAX_ATTEMPTS: "3"
+      GATEKEEPER_IDENTITY_KEY: "development-only-identity-key"
+      GATEKEEPER_STORE: "valkey"
+      GATEKEEPER_VALKEY_MODE: "standalone"
+      GATEKEEPER_VALKEY_ADDRS: "valkey:6379"
+      GATEKEEPER_VALKEY_TLS: "false"
+      GATEKEEPER_SMTP_ADDR: "mailpit:1025"
+      GATEKEEPER_SMTP_FROM: "gatekeeper@example.test"
+    ports:
+      - "127.0.0.1:9081:9081"
+    depends_on:
+      valkey:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./dev/Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      - gatekeeper
+
+  valkey:
+    image: valkey/valkey:8-alpine
+    command: valkey-server --appendonly yes
+    volumes:
+      - valkey-data:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "8025:8025"
+
+volumes:
+  valkey-data:
