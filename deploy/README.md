@@ -76,3 +76,12 @@ OTP delivery uses a bounded worker pool so a slow or unavailable SMTP provider c
     GATEKEEPER_SMTP_DELIVERY_TIMEOUT=10s
 
 These values are read at startup and can be changed without rebuilding Gatekeeper. When the queue is full, Gatekeeper preserves the same browser flow and logs the delivery-capacity failure without exposing the recipient address.
+
+
+## Graceful shutdown
+
+Gatekeeper handles SIGTERM and SIGINT by stopping both HTTP listeners, allowing active requests to finish, and then draining the bounded SMTP dispatcher. The total shutdown grace period is configurable:
+
+    GATEKEEPER_SHUTDOWN_TIMEOUT=15s
+
+If the grace period expires, outstanding HTTP connections are force-closed and Gatekeeper exits rather than blocking service shutdown indefinitely.
