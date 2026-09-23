@@ -61,6 +61,7 @@ func New(config Config) *Server {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.health)
+	mux.HandleFunc("GET /ready", s.ready)
 	mux.HandleFunc("GET /auth/check", s.check)
 	mux.HandleFunc("GET /login", s.login)
 	mux.HandleFunc("POST /login", s.startChallenge)
@@ -79,6 +80,16 @@ func (s *Server) withStateTimeout(next http.Handler) http.Handler {
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }
+
+func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
+	if s.config.Sites != nil {
+		if _, err := s.config.Sites.List(r.Context()); err != nil {
+			http.Error(w, "Gatekeeper state unavailable", http.StatusServiceUnavailable)
+			return
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
 
 func (s *Server) check(w http.ResponseWriter, r *http.Request) {
 	if cookie, err := r.Cookie(s.config.CookieName); err == nil {
