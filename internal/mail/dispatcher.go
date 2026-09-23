@@ -12,7 +12,9 @@ type AsyncDispatcher struct {
 	queue   chan Message
 	timeout time.Duration
 	wg      sync.WaitGroup
-	once    sync.Once
+
+	mu     sync.RWMutex
+	closed bool
 }
 
 func NewAsyncDispatcher(sender Sender, workers, queueSize int, timeout time.Duration) *AsyncDispatcher {
@@ -41,6 +43,13 @@ func NewAsyncDispatcher(sender Sender, workers, queueSize int, timeout time.Dura
 }
 
 func (d *AsyncDispatcher) Enqueue(message Message) error {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	if d.closed {
+		return ErrDispatcherClosed
+	}
+
 	select {
 	case d.queue <- message:
 		return nil
@@ -49,11 +58,26 @@ func (d *AsyncDispatcher) Enqueue(message Message) error {
 	}
 }
 
-func (d *AsyncDispatcher) Close() {
-	d.once.Do(func() {
+func (d *AsyncDispatcher) Shutdown(ctx context.Context) error {
+	d.mu.Lock()
+	if !d.closed {
+		d.closed = true
 		close(d.queue)
+	}
+	d.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
 		d.wg.Wait()
-	})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (d *AsyncDispatcher) worker() {
