@@ -48,6 +48,28 @@ The intended production topology is native Caddy using forward_auth to a native 
 
 The same Go application can be run in a container for development and as a static binary under systemd in production.
 
+## Linux builds
+
+Gatekeeper is built as a static Go binary and supports both common Linux architectures:
+
+- `linux/amd64`
+- `linux/arm64`
+
+Build both binaries locally with:
+
+```bash
+make build-linux
+```
+
+This produces:
+
+```text
+build/caddy-gatekeeper-linux-amd64
+build/caddy-gatekeeper-linux-arm64
+```
+
+Tagged releases publish both architecture-specific binaries automatically.
+
 ## Security status
 
 This is not yet production-ready. Before production use the project will add persistent hashed device credentials, bounded OTP attempts, rate limiting, generic SMTP delivery, site-specific allow-lists, management APIs, audit logging and hardened proxy/header handling.
